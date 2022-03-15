@@ -1,0 +1,20 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",        
+            "includePath": [
+                "/usr/include/**",
+                "/usr/include/eigen3/**",
+                "/usr/local/include/**",
+                "${workspaceFolder}/cuda/**",
+                "/usr/local/cuda-11.4/include/**"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "clang-x64"
+        }
+    ],
+    "version": 4
+  }

@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "*.tcc": "cpp",
+        "random": "cpp",
+        "thread": "cpp",
+        "__locale": "cpp",
+        "locale": "cpp",
+        "algorithm": "cpp"
+    }
+}
