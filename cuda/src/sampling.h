@@ -1,7 +1,4 @@
 #pragma once
-#include <cmath>
-#include <vector>
-#include <Eigen/Core>
 #include <cuda_runtime.h>
 #include <device_functions.h>
 #include <device_launch_parameters.h>
@@ -17,7 +14,7 @@
 */
 __global__ void getSampledPoints(
     const float *const imgs, const float* const params, float *output, float *lengths,
-    curandState *r_state, int cam_num, int width, int height, float near_t = 0.0, float resolution = 0.0
+    curandState *r_state, int cam_num, int width, int height, int offset, float near_t = 0.0, float resolution = 0.0
 );
 
 /// Main kernel function for sampler

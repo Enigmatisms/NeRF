@@ -15,6 +15,7 @@
         "utility": "cpp",
         "variant": "cpp",
         "__functional_base": "cpp",
-        "*.inc": "cpp"
+        "*.inc": "cpp",
+        "core": "cpp"
     }
 }

@@ -1,3 +1,4 @@
+#pragma once
 #include "sampling.h"
 #include "sample_extension.h"
 #include <torch/extension.h>
@@ -8,6 +9,5 @@ void cudaSampler(at::Tensor imgs, at::Tensor tfs, at::Tensor output, at::Tensor 
 
 PYBIND11_MODULE (TORCH_EXTENSION_NAME, sampler)
 {
-  
   sampler.def ("sampling", &cudaSampler, "NeRF sampling function");
 }
