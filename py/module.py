@@ -5,4 +5,10 @@
 """
 
 import torch
-from sampler import sampling
+from torch import nn
+
+class NeRF(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+    # Positional Encoding is implemented through CUDA

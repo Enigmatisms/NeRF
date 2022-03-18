@@ -8,8 +8,9 @@ setup(
     name='sampler',
     ext_modules=[
         CUDAExtension('sampler', [
-                'src/sample_extension.cu',
+                'src/nerf_extension.cu',
                 'src/sampling.cu',
+                'src/pe.cu'
             ],
             include_dirs=include_dirs,
             extra_compile_args={'cxx': ['-g',
