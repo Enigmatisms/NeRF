@@ -2,3 +2,4 @@
 **/build/
 **/dist/
 **/*.db
+**/__pycache__

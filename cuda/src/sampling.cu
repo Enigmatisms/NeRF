@@ -11,30 +11,31 @@ __global__ void getSampledPoints(
     extern __shared__ float transforms[];           /// 9 floats for RK^{-1}, 3 floats for t, 1 int for sampled_id 
     int* sample_id = (int*)(transforms + 12);
     const int ray_id = blockIdx.x + offset, bin_id = threadIdx.x, bin_num = blockDim.x, image_size = width * height;
-    short cam_id = 0, row_id = 0, col_id = 0, id_in_img = 0, state_id = ray_id * bin_num;
+    const int state_id = ray_id * bin_num + bin_id;
+    int cam_id = 0, row_id = 0, col_id = 0, id_in_img = 0;
     /// copy PK^-1 from global memory to shared local memory, enabling faster accessing
+    curand_init(state_id, 0, 0, &r_state[state_id]);
     if (bin_id == 0) {
-        curand_init(ray_id, 0, 0, &r_state[ray_id]);
         *sample_id = curand(&r_state[state_id]) % (cam_num * image_size);
         cam_id = *sample_id / (image_size);
         const float* const ptr = params + 12 * cam_id;
         for (int i = 0; i < 12; i++)
             transforms[i] = ptr[i];
+        // printf("%d, %d, [%d, %d]\n", id_in_img / width, id_in_img % width, *sample_id, ray_id);
     }
     __syncthreads();
     id_in_img = (*sample_id % image_size);
     cam_id = *sample_id / (image_size), row_id = id_in_img / width, col_id = id_in_img % width;
-    
     Eigen::Matrix3f T;       // A is equal to PK^-1, these are ex(in)trinsics respectively
     Eigen::Vector3f t;
-    T << transforms[0], transforms[1], transforms[2], transforms[3], transforms[4], transforms[5], transforms[6], transforms[7], transforms[8];
-    t << transforms[9], transforms[10], transforms[11];
-    Eigen::Vector3f raw_dir = T * Eigen::Vector3f(col_id, row_id, 1.0) + t;
+    T << transforms[0], transforms[1], transforms[2], transforms[4], transforms[5], transforms[6], transforms[8], transforms[9], transforms[10];
+    t << transforms[3], transforms[7], transforms[11];
+    Eigen::Vector3f raw_dir = T * Eigen::Vector3f(col_id, row_id, 1.0);
     raw_dir = (raw_dir / raw_dir.norm()).eval();            // normalized direction in world frame
-    float sample_depth = near_t + resolution * bin_id + curand_uniform(&r_state[state_id + bin_id]) * resolution;
+    float sample_depth = near_t + resolution * bin_id + curand_uniform(&r_state[state_id]) * resolution;
     const int ray_base = ray_id * bin_num, total_base = (ray_base + ray_id + bin_id) * 3;
     lengths[ray_base + bin_id] = sample_depth;
-    Eigen::Vector3f p = raw_dir * sample_depth;
+    Eigen::Vector3f p = raw_dir * sample_depth + t;
     output[total_base] = p.x();
     output[total_base + 1] = p.y();
     output[total_base + 2] = p.z();
@@ -58,7 +59,6 @@ __host__ void cudaSamplerKernel(
     curandState *rand_states;
     const int batch_size = imgs.size(0), width = imgs.size(3), height = imgs.size(2);
     CUDA_CHECK_RETURN(cudaMalloc((void **)&rand_states, sample_ray_num * sample_bin_num * sizeof(curandState)));
-
     const float* const img_data = imgs.data_ptr<float>();
     const float* const param_data = tfs.data_ptr<float>();
     float* output_data = output.data_ptr<float>();
