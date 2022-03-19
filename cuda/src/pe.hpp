@@ -6,11 +6,12 @@
 #include <torch/script.h>
 
 /// Shape of input is (pnum, 3)
+template <bool USE_GLOBAL>
 __global__ void positionalEncode(
-    const float* const input, float* output, int pnum, bool normalize
+    const float* const input, float* output, int pnum, int offset, bool normalize
 );
 
 /// Main kernel function for positional encoding
 __host__ void peKernel(
-    at::Tensor input, at::Tensor output, int pnum, bool normalize = true
+    at::Tensor input, at::Tensor output, int flevel_num, bool normalize = true
 );

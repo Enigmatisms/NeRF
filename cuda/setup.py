@@ -5,9 +5,9 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 include_dirs = [os.path.dirname(os.path.abspath(__file__)), "/usr/local/include/eigen3/"]
 print(include_dirs)
 setup(
-    name='sampler',
+    name='nerf_helper',
     ext_modules=[
-        CUDAExtension('sampler', [
+        CUDAExtension('nerf_helper', [
                 'src/nerf_extension.cu',
                 'src/sampling.cu',
                 'src/pe.cu'
