@@ -2,6 +2,16 @@
 #include "error_check.hpp"
 #include "sampling.h"
 
+/**
+ * @todo
+ * 1. output不够完整，应该输出9维向量，（位置，方向，RGB），RGB直接在此处输出是为了减少外部变形concatenate的时间
+ * 2. 写两个接口，一个是RGB放在最后（6维，最后一个向量前三维度是RGB，后三为0），另一个是RGB在每一个向量中
+ * 3. 后一个接口的RGB也需要放在shared memory中
+ * 4. [... python是什么意思？] （run_nerf.py 202）
+ * 5. 个人感觉，只有方向是需要normalized的，一时因为origin normalize之后就没有意义了，二是官方实现中除了NDC之外貌似也没有对origin进行显式normalize
+ * 6. 方向的normalize是l2 norm
+ */
+
 /// offset is used in multi-stream concurrency
 /// params is (ray_num, 3, 4)
 __global__ void getSampledPoints(
