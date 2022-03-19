@@ -34,3 +34,9 @@ simple_points = torch.FloatTensor([
     [1, 1, 1],
     [3, 4, 5]
 ])
+
+BLENDER_FOV = 0.6194058656692505
+
+# convert from fov angle to focal length, we assume that the image is square
+def fov2Focal(fov:float, img_width:float) -> float:
+    return (img_width / 2) / np.tan(fov * 0.5)

@@ -2,19 +2,16 @@
 
 """
     @author Enigmatisms @date 2022.3.19
-    NeRF CUDA sampler test. 512 sampling rays (per batch) and 128 points per ray: 0.00024ms
+    Test program for CUDA positional encoding
 """
 
-from pickle import FALSE
-from random import sample
 import torch
-import numpy as np
 from nerf_helper import encoding
 from time import time
 from instances import *
 
+# This Embedder comes from the official implementation
 class Embedder:
-
     def __init__(self, max_freq):
         self.max_freq = max_freq
         self.create_embedding_fn()
@@ -41,12 +38,6 @@ class Embedder:
         end_time = time()
         print("Time consumption: %.6lf s"%(end_time - start_time))
         return res
-
-# def pythonEncoding(input:torch.Tensor, flevel:int):
-#     result = []
-#     for vec in input:
-#         for val in vec:
-#             for flevel in 
 
 FLEVEL = 4
 
