@@ -7,7 +7,7 @@
                 "/usr/include/eigen3/**",
                 "/usr/local/include/**",
                 "${workspaceFolder}/cuda/**",
-                "/usr/local/cuda-11.4/include/**",
+                "/usr/local/cuda-11.6/include/**",
                 "/opt/libtorch/include/**",
                 "/opt/libtorch/include/torch/csrc/api/include/**"
             ],
