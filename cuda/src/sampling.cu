@@ -54,7 +54,7 @@ __global__ void getSampledPoints(
 /// camera poses, which should be convert to Eigen, the shape is (batch (number of cams), 3, 4)
 /// output: 1. (sample_ray_num, sample_bin_num + 1, 3), points sampled and the gt color 2. length (sample_ray_num, sample_bin_num)
 /// both of the output is a tensor
-void cudaSamplerKernel(
+void cudaSampler(
     at::Tensor imgs, at::Tensor tfs, at::Tensor output, at::Tensor lengths,
     int sample_ray_num, int sample_bin_num, float near_t, float resolution
 ) {
@@ -84,7 +84,7 @@ void cudaSamplerKernel(
 }
 
 /// Here, transformation matrix is pure rotation, with unknown intrinsics
-__global__ void easySampler(
+__global__ void easySamplerKernel(
     const float *const imgs, const float* const params, float *output, float *lengths,
     curandState *r_state, int cam_num, int width, int height, int offset, float focal, float near_t, float resolution
 ) {
@@ -128,7 +128,7 @@ __global__ void easySampler(
     __syncthreads();
 }
 
-void easySamplerKernel(
+void easySampler(
     at::Tensor imgs, at::Tensor tfs, at::Tensor output, at::Tensor lengths,
     int sample_ray_num, int sample_bin_num, float focal, float near_t, float far_t
 ) {
@@ -148,7 +148,7 @@ void easySamplerKernel(
     /// make sure that number of rays to sample is the multiple of 16
     int cascade_num = sample_ray_num >> 4;      // sample_ray_num / 16
     for (int i = 0; i < cascade_num; i++) {
-        easySampler <<< 16, sample_bin_num, 16 * sizeof(float), streams[i % 8]>>> (
+        easySamplerKernel <<< 16, sample_bin_num, 16 * sizeof(float), streams[i % 8]>>> (
             img_data, param_data, output_data, length_data, rand_states, batch_size, width, height, i << 4, focal, near_t, resolution
         );
     }

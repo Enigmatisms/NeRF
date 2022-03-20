@@ -7,11 +7,11 @@
 
 /// Shape of input is (pnum, 3)
 template <bool USE_GLOBAL>
-__global__ void positionalEncode(
+__global__ void peKernel(
     const float* const input, float* output, int pnum, int offset, bool normalize
 );
 
 /// Main kernel function for positional encoding
-__host__ void peKernel(
+__host__ void positionalEncode(
     at::Tensor input, at::Tensor output, int flevel_num, bool normalize = true
 );

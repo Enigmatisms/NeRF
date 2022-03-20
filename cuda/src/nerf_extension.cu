@@ -1,5 +1,6 @@
 #include "sampling.h"
 #include "pe.hpp"
+#include "inv_tf_sampler.h"
 #include <torch/extension.h>
 
 const std::string conservative_sampler_docs = 
@@ -11,7 +12,7 @@ const std::string conservative_sampler_docs =
 	"lengths:torch.Tensor  	the length from camera origin to each sampled points, shape (ray_num, sample per ray)\n"
 	"sample_ray_num:int  	number of rays to sample\n"
 	"sample_bin_num:int  	number of samples per ray\n"
-	"near_t:int  			minimum distance from camera origin\n"
+	"near_t:float  			minimum distance from camera origin\n"
 	"resolution:float  		(max_distance - min_distance) / sample_bin_num"
 ;
 
@@ -23,7 +24,7 @@ const std::string sampler_docs =
 	"lengths:torch.Tensor  	the length from camera origin to each sampled points, shape (ray_num, sample per ray)\n"
 	"sample_ray_num:int  	number of rays to sample\n"
 	"sample_bin_num:int  	number of samples per ray\n"
-	"near_t:int  			minimum distance from camera origin (meter)\n"
+	"near_t:float  			minimum distance from camera origin (meter)\n"
 	"far_t:float  			maximum distance from camera origin (meter)\n"
 ;
 
@@ -35,13 +36,20 @@ const std::string pe_docs =
 	"normalize:bool			Whether using L2 norm to normalize input\n"
 ;
 
-// __host__ void peKernel(
-//     at::Tensor input, at::Tensor output, int pnum, bool normalize = true
-// );
+const std::string inv_tf_docs = 
+	"Inverse transform sampler implemented in CUDA\n\n"
+	"weights:torch.Tensor	weights output by coarse network (sums to 1, per ray), shape (ray_num, sample point num per ray in coarse network)\n"
+	"rays:torch.Tensor		Information about rays (camera translation and ray orientation), shape (ray_num, 6)\n"
+	"output:torch.Tensor	inverse transform sampled points, shape (ray_num, fine points per ray, 6)\n"
+	"sampled_pnum:int		fine points per ray to sample\n"
+	"near:float				minimum distance from camera origin (meter)\n"
+	"far:float				maximum distance from camera origin (meter)\n"
+;
 
 PYBIND11_MODULE (TORCH_EXTENSION_NAME, nerf_helper)
 {
-  	nerf_helper.def ("comservativeSampling", &cudaSamplerKernel, conservative_sampler_docs.c_str());
-  	nerf_helper.def ("sampling", &easySamplerKernel, sampler_docs.c_str());
-	nerf_helper.def ("encoding", &peKernel, pe_docs.c_str());
+  	nerf_helper.def ("comservativeSampling", &cudaSampler, conservative_sampler_docs.c_str());
+  	nerf_helper.def ("sampling", &easySampler, sampler_docs.c_str());
+	nerf_helper.def ("encoding", &positionalEncode, pe_docs.c_str());
+	nerf_helper.def ("invTransformSample", &inverseTransformSample, inv_tf_docs.c_str());
 }

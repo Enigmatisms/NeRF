@@ -6,7 +6,7 @@ constexpr float PI = 3.14159265358979f;
 /// input number of points (pnum) mod 16 = 0, since block size is 16, thread size is up to freq_n
 /// output: concatenated (pnum, 2 * L * 3)
 template <bool USE_GLOBAL>
-__global__ void positionalEncode(
+__global__ void peKernel(
     const float* const input, float* output, int pnum, int offset, bool normalize
 ) {
     extern __shared__ float pt_val[];
@@ -41,7 +41,7 @@ __global__ void positionalEncode(
     __syncthreads();
 }
 
-void peKernel(
+void positionalEncode(
     at::Tensor input, at::Tensor output, int flevel_num, bool normalize
 ) {
     /// pnum should better be the multiple of 16, since block size is 16
@@ -58,14 +58,14 @@ void peKernel(
         for (int i = 0; i < 8; i++)
             cudaStreamCreateWithFlags(&streams[i],cudaStreamNonBlocking);
         for (int i = 0; i < cascade_num; i++) {
-            positionalEncode<false><<< 16, flevel_num, 4 * sizeof(float), streams[i % 8]>>> (
+            peKernel<false><<< 16, flevel_num, 4 * sizeof(float), streams[i % 8]>>> (
                 input_data, output_data, pnum, i << 4, normalize
             );
         }
         for (int i = 0; i < 8; i++)
             cudaStreamDestroy(streams[i]);
     } else {
-        positionalEncode<false><<< pnum, flevel_num, 4 * sizeof(float)>>> (
+        peKernel<false><<< pnum, flevel_num, 4 * sizeof(float)>>> (
             input_data, output_data, pnum, 0, normalize
         );
     }
