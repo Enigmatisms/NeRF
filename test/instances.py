@@ -40,3 +40,23 @@ BLENDER_FOV = 0.6194058656692505
 # convert from fov angle to focal length, we assume that the image is square
 def fov2Focal(fov:float, img_width:float) -> float:
     return (img_width / 2) / np.tan(fov * 0.5)
+
+if __name__ == "__main__":
+    a = torch.FloatTensor([
+        [[1, 1, 1],
+        [2, 2, 2]],
+        [[-1, -1, -1],
+        [-2, -2, -2]],
+        [[0, 0, 0],
+        [1, 1, -1]]
+    ])
+    
+    b = torch.Tensor([
+        [0.5, 0.5], 
+        [0.2, 0.2],
+        [0.8, 0.8]
+    ])
+    
+    print(a.shape, b.shape)
+    
+    print(b[:, :, None] * a)

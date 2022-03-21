@@ -3,3 +3,4 @@
 **/dist/
 **/*.db
 **/__pycache__
+**/*.json

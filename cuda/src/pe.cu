@@ -62,12 +62,13 @@ void positionalEncode(
                 input_data, output_data, pnum, i << 4, normalize
             );
         }
+        CUDA_CHECK_RETURN(cudaDeviceSynchronize());
         for (int i = 0; i < 8; i++)
             cudaStreamDestroy(streams[i]);
     } else {
         peKernel<false><<< pnum, flevel_num, 4 * sizeof(float)>>> (
             input_data, output_data, pnum, 0, normalize
         );
+        CUDA_CHECK_RETURN(cudaDeviceSynchronize());
     }
-    CUDA_CHECK_RETURN(cudaDeviceSynchronize());
 }

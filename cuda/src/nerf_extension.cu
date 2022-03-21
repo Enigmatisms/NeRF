@@ -39,6 +39,15 @@ const std::string pe_docs =
 const std::string inv_tf_docs = 
 	"Inverse transform sampler implemented in CUDA\n\n"
 	"weights:torch.Tensor	weights output by coarse network (sums to 1, per ray), shape (ray_num, sample point num per ray in coarse network)\n"
+	"output:torch.Tensor	inverse transform sampled points depth (from camera origin to point), shape (ray_num, fine points per ray)\n"
+	"sampled_pnum:int		fine points per ray to sample\n"
+	"near:float				minimum distance from camera origin (meter)\n"
+	"far:float				maximum distance from camera origin (meter)\n"
+;
+
+const std::string inv_tf_pt_docs = 
+	"(Deprecated, only for testing) Inverse transform sampler implemented in CUDA\n\n"
+	"weights:torch.Tensor	weights output by coarse network (sums to 1, per ray), shape (ray_num, sample point num per ray in coarse network)\n"
 	"rays:torch.Tensor		Information about rays (camera translation and ray orientation), shape (ray_num, 6)\n"
 	"output:torch.Tensor	inverse transform sampled points, shape (ray_num, fine points per ray, 6)\n"
 	"sampled_pnum:int		fine points per ray to sample\n"
@@ -52,4 +61,5 @@ PYBIND11_MODULE (TORCH_EXTENSION_NAME, nerf_helper)
   	nerf_helper.def ("sampling", &easySampler, sampler_docs.c_str());
 	nerf_helper.def ("encoding", &positionalEncode, pe_docs.c_str());
 	nerf_helper.def ("invTransformSample", &inverseTransformSample, inv_tf_docs.c_str());
+	nerf_helper.def ("invTransformSamplePt", &inverseTransformSamplePt, inv_tf_pt_docs.c_str());
 }

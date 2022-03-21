@@ -72,8 +72,8 @@ def sortTest():
         print("%d / 100"%(i))
     print("Finished within %.6lf s"%(time_sum))
 
-
+# torch.sort implement is even faster than moderngpu implementation
 if __name__ == "__main__":
-    # samples = generateTestSamples(4096, 64)
-    # invSamplerTest(samples)
-    sortTest()
+    samples = generateTestSamples(4096, 64)
+    invSamplerTest(samples)
+    # sortTest()
