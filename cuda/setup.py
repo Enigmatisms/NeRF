@@ -9,6 +9,7 @@ setup(
     ext_modules=[
         CUDAExtension('nerf_helper', [
                 'src/nerf_extension.cu',
+                'src/inv_tf_sampler.cu',
                 'src/sampling.cu',
                 'src/pe.cu'
             ],
