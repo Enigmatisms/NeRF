@@ -7,16 +7,47 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from nerf_helper import invTransformSample
-from utils import *
+from nerf_helper import positionalEncode
+from utils import inverseSample
+
+def makeMLP(in_chan, out_chan, act = nn.ReLU, batch_norm = False):
+    modules = [nn.Linear(in_chan, out_chan)]
+    if batch_norm == True:
+        modules.append(nn.BatchNorm1d(out_chan))
+    if act == True:
+        modules.append(nn.ReLU(inplace = True))
+    return modules
 
 class NeRF(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, position_flevel, direction_flevel) -> None:
         super().__init__()
+        self.position_flevel = position_flevel
+        self.direction_flevel = direction_flevel
+
+        module_list = makeMLP(60, 256)
+        # for i in range(7):
+
+        self.lin_body = nn.Sequential(
+            
+        )
 
     # Positional Encoding is implemented through CUDA
 
-    def render(rgbo:torch.Tensor, depth:torch.Tensor) -> torch.Tensor:
+    # for coarse network, input is obtained by sampling, sampling result is (ray_num, point_num, 9), (depth) (ray_num, point_num)
+    def forward(self, pts:torch.Tensor, depth:torch.Tensor) -> torch.Tensor:
+        flat_batch = pts.shape[0] * pts.shape[1]
+        position_dim, direction_dim = 6 * self.position_flevel, 6 * self.direction_flevel
+        encoded_x:torch.Tensor = torch.zeros(flat_batch, position_dim)
+        encoded_r:torch.Tensor = torch.zeros(flat_batch, direction_dim)
+        positionalEncode(pts[:, :, :3].view(-1, 3), encoded_x, self.position_flevel, False)
+        positionalEncode(pts[:, :, 3:6].view(-1, 3), encoded_r, self.direction_flevel, False)
+        encoded_x = encoded_x.view(pts.shape[0], pts.shape[1], position_dim)
+        encoded_x = encoded_x.view(pts.shape[0], pts.shape[1], direction_dim)
+
+
+        pass
+
+    def render(self, rgbo:torch.Tensor, depth:torch.Tensor) -> torch.Tensor:
         rgb:torch.Tensor = rgbo[..., :3] # shape (ray_num, pnum, 3)
         # RGB passed through sigmoid
         rgb_normed:torch.Tensor = F.sigmoid(rgb)
