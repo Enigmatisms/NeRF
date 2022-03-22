@@ -11,24 +11,10 @@ import matplotlib.pyplot as plt
 from nerf_helper import invTransformSample
 from time import time
 
-# input weights shape: (ray_num, point_num), prefix sum should be performed in dim1
-def weightPrefixSum(weights:torch.Tensor):
-    result = weights.clone()
-    print(result.shape, result[:, 0].shape)
-    for i in range(1, weights.shape[1]):
-        result[:, i] += result[:, i-1]
-    return result
+import sys
+sys.path.append("..")
 
-def generateTestSamples(ray_num:int, coarse_pnum:int, sigma_factor:float = 0.1):
-    def gaussian(x:float, mean:float, std:float):
-        return 1./(np.sqrt(2 * np.pi) * std) * np.exp(-((x - mean)**2) / (2 * std ** 2))
-    result = []
-    for _ in range(ray_num):
-        gauss = gaussian(np.linspace(2, 6, coarse_pnum), 4, 4 * sigma_factor)
-        gauss += np.random.uniform(0, np.mean(gauss) * 0.1, size = gauss.shape)
-        gauss /= np.sum(gauss)
-        result.append(torch.from_numpy(gauss).view(1, -1))
-    return torch.cat(result, dim = 0)
+from py.utils import weightPrefixSum, generateTestSamples, inverseSample
 
 def sampleVisualize(samples:torch.Tensor):
     prefix_sum = weightPrefixSum(samples)
@@ -42,15 +28,8 @@ def sampleVisualize(samples:torch.Tensor):
 
 def invSamplerTest(samples:torch.Tensor):
     PNUM_SAMPLE = 128
-    NEAR = 2
-    FAR = 6
-    prefix_sum = weightPrefixSum(samples).float().cuda()
     rays = torch.FloatTensor([0, 0, 0, 1, 1, 0]).repeat(repeats = (4096, 1)).cuda()
-    output = torch.zeros(4096, 128, 6, dtype = torch.float32).cuda()
-    start_time = time()
-    invTransformSample(prefix_sum, rays, output, PNUM_SAMPLE, NEAR, FAR)
-    end_time = time()
-    print("Process completed within %.6lf s"%(end_time - start_time))
+    output = inverseSample(samples, rays, PNUM_SAMPLE)
 
     axis = plt.axes(projection='3d')
     points = output.cpu()
@@ -74,6 +53,7 @@ def sortTest():
 
 # torch.sort implement is even faster than moderngpu implementation
 if __name__ == "__main__":
+    torch.set_default_tensor_type(torch.FloatTensor)
     samples = generateTestSamples(4096, 64)
     invSamplerTest(samples)
     # sortTest()

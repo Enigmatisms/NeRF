@@ -52,11 +52,13 @@ if __name__ == "__main__":
     ])
     
     b = torch.Tensor([
-        [0.5, 0.5], 
-        [0.2, 0.2],
+        [0.5, 0.4], 
+        [0.2, -0.2],
         [0.8, 0.8]
     ])
     
     print(a.shape, b.shape)
+    c = b[:, :, None] * a
+    print(c)
+    print(torch.sum(c, dim = 1))
     
-    print(b[:, :, None] * a)
