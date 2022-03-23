@@ -2,6 +2,9 @@
 import torch
 import numpy as np
 from scipy.spatial.transform import Rotation as R
+import sys
+sys.path.append("..")
+from py.utils import fov2Focal
 
 K = torch.FloatTensor([
     [100, 0, 100],
@@ -36,10 +39,6 @@ simple_points = torch.FloatTensor([
 ])
 
 BLENDER_FOV = 0.6194058656692505
-
-# convert from fov angle to focal length, we assume that the image is square
-def fov2Focal(fov:float, img_width:float) -> float:
-    return (img_width / 2) / np.tan(fov * 0.5)
 
 if __name__ == "__main__":
     a = torch.FloatTensor([

@@ -41,3 +41,6 @@ def inverseSample(weights:torch.Tensor, rays:torch.Tensor, sample_pnum:int, near
     # depth * ray_direction + origin (this should be further tested)
     raw_pts[:, :, :3] += sort_depth[:, :, None] * raw_pts[:, :, 3:]
     return raw_pts, sort_depth          # depth is used for rendering
+
+def fov2Focal(fov:float, img_width:float) -> float:
+    return (img_width / 2) / np.tan(fov * 0.5)

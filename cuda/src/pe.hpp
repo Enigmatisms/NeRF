@@ -1,3 +1,10 @@
+/**
+ * @file pe.hpp
+ * @author Enigmatisms
+ * @brief Sinusoidal positional encoding implemented in CUDA
+ * @date 2022-03-19
+ * @copyright Copyright (c) 2022
+ */
 #pragma once
 #include <cuda_runtime.h>
 #include <device_functions.h>

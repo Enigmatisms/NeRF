@@ -1,3 +1,10 @@
+/**
+ * @file sampling.h
+ * @author Enigmatisms
+ * @brief Randomized sampler, used in training phase to conserve GPU memory
+ * @date 2022-03-17
+ * @copyright Copyright (c) 2022
+ */
 #pragma once
 #include <cuda_runtime.h>
 #include <device_functions.h>
