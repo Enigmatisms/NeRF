@@ -15,13 +15,15 @@ K = torch.FloatTensor([
 Rs = ([
     torch.eye(3, dtype = torch.float32),
     torch.from_numpy(R.from_rotvec(np.pi / 2 * np.array([0, 0, 1])).as_matrix()).float(),
-    torch.from_numpy(R.from_rotvec(np.pi / 3 * 2 * np.array([0, 0, 1])).as_matrix()).float()
+    torch.from_numpy(R.from_rotvec(np.pi / 3 * 2 * np.array([0, 0, 1])).as_matrix()).float(),
+    torch.from_numpy(R.from_rotvec(np.pi / 3 * np.array([0, 0, 1])).as_matrix()).float()
 ])
 
 ts = ([
     torch.FloatTensor([[0, 2.5, 1.0]]).view(-1, 1),
     torch.FloatTensor([[1.0, 0, 1.0]]).view(-1, 1),
     torch.FloatTensor([[2.0, 1.0, 1.0]]).view(-1, 1),
+    torch.FloatTensor([[0, 0, 1.0]]).view(-1, 1)
 ])
 
 sampled_points = torch.FloatTensor([
