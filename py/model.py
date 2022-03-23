@@ -9,8 +9,7 @@ from torch import nn
 from time import time
 from matplotlib import image
 from dataset import CustomDataSet
-from nerf_helper import sampling
-from nerf_helper import encoding
+from nerf_helper import sampling, encoding
 from torch.nn import functional as F
 from utils import inverseSample, fov2Focal
 from torchvision.transforms import transforms
@@ -48,6 +47,15 @@ class NeRF(nn.Module):
             *makeMLP(280, 128),
             *makeMLP(128, 3, nn.Sigmoid())
         )
+
+    def loadFromFile(self, load_path:str):
+        save = torch.load(load_path)   
+        save_model = save['model']                  
+        model_dict = self.state_dict()
+        state_dict = {k:v for k, v in save_model.items()}
+        model_dict.update(state_dict)
+        self.load_state_dict(model_dict) 
+        print("Swin Transformer Model loaded from '%s'"%(load_path))
 
     # for coarse network, input is obtained by sampling, sampling result is (ray_num, point_num, 9), (depth) (ray_num, point_num)
     # TODO: fine-network输入的point_num是192，会产生影响吗？

@@ -6,13 +6,16 @@
 import os
 import torch
 import argparse
-from functools import partial
 
 from torch import optim
-
 from torch.cuda import amp
+
+from torch import nn
 from timm.utils import NativeScaler
 from timm.models import model_parameters
+from nerf_helper import sampling, imageSampling
+from utils import inverseSample, getSummaryWriter
+from model import NeRF
 
 # from timm.loss import SoftTargetCrossEntropy
 # from timm.scheduler import CosineLRScheduler
@@ -28,7 +31,7 @@ parser.add_argument("--batch_size", type = int, default = 100, help = "Batch siz
 parser.add_argument("--eval_time", type = int, default = 50, help = "Eval every <eval_time> batches.")
 parser.add_argument("--cooldown_epoch", type = int, default = 10, help = "Epochs to cool down lr after cyclic lr.")
 parser.add_argument("--eval_div", type = int, default = 5, help = "Output every <...> times in evaluation")
-parser.add_argument("--name", type = str, default = "model_1.pth", help = "Model name for loading")
+parser.add_argument("--name", type = str, default = "model_1", help = "Model name for loading")
 parser.add_argument("--weight_decay", type = float, default = 3e-2, help = "Weight Decay in AdamW")
 parser.add_argument("--max_lr", type = float, default = 55e-5, help = "Max learning rate")
 parser.add_argument("--min_lr", type = float, default = 1e-5, help = "Min learning rate")
@@ -37,16 +40,6 @@ parser.add_argument("-l", "--load", default = False, action = "store_true", help
 parser.add_argument("-s", "--use_scaler", default = False, action = "store_true", help = "Use AMP scaler to speed up")
 args = parser.parse_args()
 
-# Calculate accurarcy (correct prediction counter)
-def oneHotAccCounter(pred:torch.FloatTensor, truth:torch.FloatTensor)->int:
-    _, pred_max_pos = torch.max(pred, dim = 1)
-    _, gt_max_pos = torch.max(truth, dim = 1)
-    return torch.sum(pred_max_pos == gt_max_pos)
-
-def accCounter(pred:torch.FloatTensor, truth:torch.FloatTensor)->int:
-    # TODO: to be modified
-    return 0
-
 def main():
     epochs              = args.epochs
     eval_time           = args.eval_time
@@ -54,7 +47,8 @@ def main():
     batch_size          = args.batch_size
     del_dir             = args.del_dir
     use_load            = args.load
-    load_path           = default_model_path + args.name
+    load_path_coarse    = default_model_path + args.name + "_coarse.pth"
+    load_path_fine      = default_model_path + args.name + "_fine.pth"
 
     # ======= load train set and test set =======
     train_set = None            # getDataset()
@@ -68,18 +62,21 @@ def main():
     
     # ======= instantiate model =====
     # NOTE: model is recommended to have loadFromFile method
-    # model = Model()
-    # if use_load == True and os.path.exists(load_path):
-    #     model.loadFromFile(load_path)
-    # else:
-    #     print("Not loading or load path '%s' does not exist."%(load_path))
+    coarse_net = NeRF(10, 4)
+    fine_net = NeRF(10, 4)
+    if use_load == True and os.path.exists(load_path_coarse) and os.path.exists(load_path_fine):
+        coarse_net.loadFromFile(load_path_coarse)
+        fine_net.loadFromFile(load_path_fine)
+    else:
+        print("Not loading or load path '%s' or '%s' does not exist."%(load_path_coarse, load_path_fine))
 
     # ======= Loss function ==========
-    # loss_func = SoftTargetCrossEntropy().cuda()
-    # eval_loss_func = torch.nn.CrossEntropyLoss().cuda()
+    loss_func = nn.MSELoss().cuda()
 
     # ======= Optimizer and scheduler ========
-    # opt = optim.AdamW(model.parameters(), lr = 1.0, betas = (0.9, 0.999), weight_decay=args.weight_decay)
+    opt_c = optim.Adam(coarse_net.parameters(), lr = 1.0, betas = (0.9, 0.999), weight_decay=args.weight_decay)
+    opt_f = optim.Adam(fine_net.parameters(), lr = 1.0, betas = (0.9, 0.999), weight_decay=args.weight_decay)
+
     # min_max_ratio = args.min_lr / args.max_lr
     # lec_sch_func = CosineLRScheduler(opt, t_initial = epochs // 2, t_mul = 1, lr_min = min_max_ratio, decay_rate = 0.1,
     #         warmup_lr_init = min_max_ratio, warmup_t = 10, cycle_limit = 2, t_in_epochs = True)
@@ -88,7 +85,7 @@ def main():
     epochs = 0  # lec_sch_func.get_cycle_length() + args.cooldown_epoch
     
     # ====== tensorboard summary writer ======
-    # writer = getSummaryWriter(epochs, del_dir)
+    writer = getSummaryWriter(epochs, del_dir)
 
     amp_scaler = None
     if use_amp:

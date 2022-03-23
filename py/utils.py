@@ -4,9 +4,20 @@
     Utility function for NeRF
     @author Enigmatisms @date 2022.3.22
 """
+import os
 import torch
+import shutil
+import datetime
 import numpy as np
+from torch.utils.tensorboard import SummaryWriter
 from nerf_helper import invTransformSample
+
+def getSummaryWriter(epochs:int, del_dir:bool):
+    logdir = './logs/'
+    if os.path.exists(logdir) and del_dir:
+        shutil.rmtree(logdir)
+    time_stamp = "{0:%Y-%m-%d/%H-%M-%S}-epoch{1}/".format(datetime.now(), epochs)
+    return SummaryWriter(log_dir = logdir + time_stamp)
 
 # input weights shape: (ray_num, point_num), prefix sum should be performed in dim1
 def weightPrefixSum(weights:torch.Tensor) -> torch.Tensor:

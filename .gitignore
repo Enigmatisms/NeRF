@@ -4,3 +4,4 @@
 **/*.db
 **/__pycache__
 **/*.json
+**/*.out
