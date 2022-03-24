@@ -9,7 +9,6 @@ import torch
 import numpy as np
 from time import time
 from nerf_helper import imageSampling
-from scipy.spatial.transform import Rotation as R
 from mpl_toolkits.mplot3d import axes3d
 import matplotlib.pyplot as plt
 from instances import BLENDER_FOV, Rs, ts
@@ -28,7 +27,7 @@ if __name__ == "__main__":
     lengths = torch.zeros(IMAGE_SIZE, IMAGE_SIZE, POINT_TO_SAMPLE, dtype = torch.float32).cuda()
     tf = np.concatenate((Rs[-1], ts[-1]), axis = -1)
     tf = torch.from_numpy(tf).float().cuda()
-    focal = fov2Focal(BLENDER_FOV)
+    focal = fov2Focal(BLENDER_FOV, IMAGE_SIZE)
     start_time = time()
     imageSampling(tf, output, lengths, IMAGE_SIZE, IMAGE_SIZE, POINT_TO_SAMPLE, focal, NEAR_T, FAR_T)
     end_time = time()
@@ -37,8 +36,7 @@ if __name__ == "__main__":
     for i in range(INITIAL_SKIP, LINE_TO_VIZ + INITIAL_SKIP):
         point_list = output[i, 0].cpu().numpy()
         axis.plot3D(point_list[:, 0], point_list[:, 1], point_list[:, 2], label = "line %i"%(i))
-        # axis.scatter(point_list[:, 0], point_list[:, 1], point_list[:, 2], c = 'r', s = 8)
-    print(point_list[:, :3])
+        axis.scatter(point_list[:, 0], point_list[:, 1], point_list[:, 2], c = 'r', s = 2)
     axis.legend()
     axis.set_zlabel('Z') 
     axis.set_ylabel('Y')
