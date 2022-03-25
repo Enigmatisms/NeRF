@@ -21,7 +21,7 @@ class Embedder:
         d = 3
         out_dim = 0
 
-        freq_bands = 2.0**torch.arange(self.max_freq + 1)
+        freq_bands = 2.0**torch.arange(self.max_freq)
 
         for freq in freq_bands:
             for p_fn in (torch.sin, torch.cos):
@@ -39,18 +39,19 @@ class Embedder:
         print("Time consumption: %.6lf s"%(end_time - start_time))
         return res
 
-FLEVEL = 4
+FLEVEL = 10
 
 if __name__ == "__main__":
     emb = Embedder(FLEVEL)
     zeros = torch.normal(0, 2, (8192, 3)).float().cuda()
     res1 = emb.embed(zeros)
-    print("")
-    output = torch.zeros(zeros.shape[0], (FLEVEL + 1) * 6).float().cuda()
+    print(res1, res1.shape)
+    output = torch.zeros(zeros.shape[0], FLEVEL * 6).float().cuda()
     start_time = time()
-    encoding(zeros, output, FLEVEL + 1, False)
+    encoding(zeros, output, FLEVEL, False)
     end_time = time()
     print("Time consumption: %.6lf s"%(end_time - start_time))
+    print(output, output.shape)
     diff_mat = res1 - output
     print("Difference:", diff_mat.norm())
     # print(output)

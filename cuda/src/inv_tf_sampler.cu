@@ -36,19 +36,19 @@ __host__ void inverseTransformSample(
     const float* const weight_data = weights.data_ptr<float>();
     float* output_data = output.data_ptr<float>();
     const float resolution = (far - near) / float(sampled_pnum);
-    cudaStream_t streams[8];
+    cudaStream_t streams[16];
     if (ray_num > 16) {
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < 16; i++)
             cudaStreamCreateWithFlags(&streams[i],cudaStreamNonBlocking);
         /// make sure that number of rays to sample is the multiple of 16
-        int cascade_num = ray_num >> 4;      // sample_ray_num / 16
+        int cascade_num = ray_num >> 7;      // sample_ray_num / 16
         for (int i = 0; i < cascade_num; i++) {
-            inverseTransformSampleKernel <<< 16, sampled_pnum, sampled_pnum * sizeof(float), streams[i % 8]>>> (
-                weight_data, output_data, rand_states, coarse_pnum, i << 4, near, resolution
+            inverseTransformSampleKernel <<< 128, sampled_pnum, sampled_pnum * sizeof(float), streams[i % 16]>>> (
+                weight_data, output_data, rand_states, coarse_pnum, i << 7, near, resolution
             );
         }
         CUDA_CHECK_RETURN(cudaDeviceSynchronize());
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < 16; i++)
             cudaStreamDestroy(streams[i]);
     } else {
         inverseTransformSampleKernel <<< 16, sampled_pnum, sampled_pnum * sizeof(float)>>> (

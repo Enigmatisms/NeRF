@@ -14,12 +14,10 @@ __global__ void peKernel(
     const int input_base = point_id * 3, output_base = (input_base * freq_num) << 1;
     float normalize_sum = 0.0;
     if (USE_GLOBAL == false) {
-        if (freq_id == 0) {
-            for (int i = 0; i < 3; i++) {
-                pt_val[i] = input[input_base + i];
-                if (normalize)
-                    normalize_sum += powf(pt_val[i], 2);
-            }
+        if (freq_id < 3) {
+            pt_val[freq_id] = input[input_base + freq_id];
+            if (normalize)
+                normalize_sum += powf(pt_val[freq_id], 2);
         }
         __syncthreads();
     }
@@ -51,19 +49,19 @@ void positionalEncode(
 
     
     /// make sure that number of rays to sample is the multiple of 16
-    int cascade_num = (pnum >= 16) ? (pnum >> 4) : 1;      // sample_ray_num / 16
-    if (pnum >= 16) {
+    int cascade_num = (pnum >= 256) ? (pnum >> 8) : 1;      // sample_ray_num / 16
+    if (pnum >= 256) {
         /// GPU stream concurrency
-        cudaStream_t streams[8];
-        for (int i = 0; i < 8; i++)
+        cudaStream_t streams[16];
+        for (int i = 0; i < 16; i++)
             cudaStreamCreateWithFlags(&streams[i],cudaStreamNonBlocking);
         for (int i = 0; i < cascade_num; i++) {
-            peKernel<false><<< 16, flevel_num, 4 * sizeof(float), streams[i % 8]>>> (
-                input_data, output_data, pnum, i << 4, normalize
+            peKernel<false><<< 256, flevel_num, 4 * sizeof(float), streams[i % 16]>>> (
+                input_data, output_data, pnum, i << 8, normalize
             );
         }
         CUDA_CHECK_RETURN(cudaDeviceSynchronize());
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < 16; i++)
             cudaStreamDestroy(streams[i]);
     } else {
         peKernel<false><<< pnum, flevel_num, 4 * sizeof(float)>>> (

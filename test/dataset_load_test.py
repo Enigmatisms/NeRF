@@ -7,6 +7,7 @@
 
 import matplotlib.pyplot as plt
 from torchvision import transforms
+from torchvision.utils import save_image
 
 import sys
 sys.path.append("..")
@@ -17,7 +18,13 @@ tf_func = transforms.ToTensor()
 def loadSceneTest(path:str, is_train:bool):
     # do not shuffle images when training, since the information of each image is sorted
     image_folder = CustomDataSet(path, transform = tf_func, is_train = is_train)
-    cam_fov, tfs, all_imgs = image_folder.get_dataset()
+    cam_fov, tfs, all_imgs = image_folder.get_dataset(False)
+    image = image_folder[4][0]
+    for i in range(800):
+        for j in range(800):
+            print("%.2lf"%(image[i, j].item()), end = ', ')
+        print('\n', end='')
+    save_image(image_folder[4], "../output/test1.png", "png")
     print(all_imgs.shape)
     for i in range(3):
         plt.subplot(1, 3, i + 1)

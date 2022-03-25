@@ -21,7 +21,7 @@ const std::string sampler_docs =
 	"NeRF sampling function for coarse network implemented in CUDA\n\n"
 	"imgs:torch.Tensor 		input multi-view images, shape (N, C, H, W)\n"
 	"tfs:torch.Tensor  		transformation. Extrinsics (P) multiples inverse of intrinsic (K^-1) and translation -> (T, t), shape (cam_num, 3, 4)\n"
-	"output:torch.Tensor  	sampled points for each ray, with ground truth color, shape (ray_num, sample per ray + 1, 3), the last 3 elems are RGB vals\n"
+	"output:torch.Tensor  	sampled points for each ray, with ground truth color, shape (ray_num, sample per ray + 1, 9), the last 9 elems are camera translation and rotation vals\n"
 	"lengths:torch.Tensor  	the length from camera origin to each sampled points, shape (ray_num, sample per ray)\n"
 	"sample_ray_num:int  	number of rays to sample\n"
 	"sample_bin_num:int  	number of samples per ray\n"

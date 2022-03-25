@@ -97,6 +97,9 @@ __global__ void easySamplerKernel(
     if (bin_id == 0) {
         *sample_id = curand(&r_state[state_id]) % (cam_num * image_size);
         cam_id = *sample_id / (image_size);
+        id_in_img = (*sample_id % image_size);
+        row_id = id_in_img / width;
+        col_id = id_in_img % width;
         const float* const ptr = params + 12 * cam_id;
         for (int i = 0; i < 12; i++)
             transforms[i] = ptr[i];
@@ -115,15 +118,24 @@ __global__ void easySamplerKernel(
     Eigen::Vector3f raw_dir = T * Eigen::Vector3f(float(col_id - width >> 1) / focal, float((height >> 1) - row_id) / focal, -1.0);
     raw_dir = (raw_dir / raw_dir.norm()).eval();            // normalized direction in world frame
     float sample_depth = near_t + resolution * bin_id + curand_uniform(&r_state[state_id]) * resolution;
-    // output shape (ray_num, point num, 9) (9 dims per point)
-    const int ray_base = ray_id * bin_num, total_base = (ray_base + bin_id) * 9;
+    // output shape (ray_num, point num + 1, 9) (9 dims per point), length is of shape (ray_num, point_num) (no plus 1)
+    const int ray_base = ray_id * bin_num, total_base = (ray_base + ray_id + bin_id) * 9;
     lengths[ray_base + bin_id] = sample_depth;
     // sampled point origin
     Eigen::Vector3f p = raw_dir * sample_depth + t;
+    // 此处需要额外输出t以及
     for (int i = 0; i < 3; i++) {
         output[total_base + i] = p(i);                      // point origin
         output[total_base + i + 3] = raw_dir(i);            // normalized direction
         output[total_base + i + 6] = transforms[12 + i];    // rgb value
+    }
+    if (bin_id == 0) {
+        const int end_base = (ray_base + ray_id + bin_num) * 9;
+         for (int i = 0; i < 3; i++) {
+            output[end_base + i] = t(i);                      // point origin
+            output[end_base + i + 3] = raw_dir(i);            // normalized direction
+            output[end_base + i + 6] = 0;                     // rgb value
+        }
     }
     __syncthreads();
 }
@@ -142,18 +154,18 @@ void easySampler(
     const float resolution = (far_t - near_t) / float(sample_bin_num);
 
     /// GPU stream concurrency
-    cudaStream_t streams[8];
-    for (int i = 0; i < 8; i++)
+    cudaStream_t streams[16];
+    for (int i = 0; i < 16; i++)
         cudaStreamCreateWithFlags(&streams[i],cudaStreamNonBlocking);
     /// make sure that number of rays to sample is the multiple of 16
-    int cascade_num = sample_ray_num >> 4;      // sample_ray_num / 16
+    int cascade_num = sample_ray_num >> 6;      // sample_ray_num / 16
     for (int i = 0; i < cascade_num; i++) {
-        easySamplerKernel <<< 16, sample_bin_num, 16 * sizeof(float), streams[i % 8]>>> (
-            img_data, param_data, output_data, length_data, rand_states, batch_size, width, height, i << 4, focal, near_t, resolution
+        easySamplerKernel <<< 64, sample_bin_num, 16 * sizeof(float), streams[i % 16]>>> (
+            img_data, param_data, output_data, length_data, rand_states, batch_size, width, height, i << 6, focal, near_t, resolution
         );
     }
     CUDA_CHECK_RETURN(cudaDeviceSynchronize());
-    for (int i = 0; i < 8; i++)
+    for (int i = 0; i < 16; i++)
         cudaStreamDestroy(streams[i]);
     CUDA_CHECK_RETURN(cudaFree(rand_states));
 }

@@ -44,7 +44,11 @@ class CustomDataSet(data.Dataset):
         tf_np = np.stack([frame["transform_matrix"] for frame in items["frames"]], axis = 0)
         tfs = torch.from_numpy(tf_np)
         return cam_fov, tfs.float()
-    
+
+    def getCameraParam(self):
+        json_file = "%stransforms_%s.json"%(self.root_dir, "train" if self.is_train else "test")
+        return CustomDataSet.readFromJson(json_file)
+
     """
         Return camera fov, transforms for each image, batchified image data in shape (N, 3, H, W)
     """
@@ -54,8 +58,7 @@ class CustomDataSet(data.Dataset):
             img_loc = os.path.join(self.main_dir, img_name)
             image = Image.open(img_loc).convert("RGB")
             result.append(self.transform(image))
-        json_file = "%stransforms_%s.json"%(self.root_dir, "train" if self.is_train else "test")
-        cam_fov, tfs = CustomDataSet.readFromJson(json_file)
+        cam_fov, tfs = self.getCameraParam()
         if to_cuda:
             tfs = tfs.cuda()
             return cam_fov, tfs, torch.stack(result, dim = 0).float().cuda()
