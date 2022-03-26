@@ -1,5 +1,5 @@
 /**
- * @file error_check.hpp
+ * @file error_check.cuh
  * @author Unknown. Adopted from stackoverflow
  * @brief Output error message in CUDA programs
  */

@@ -68,7 +68,9 @@ class NeRF(nn.Module):
 
     # for coarse network, input is obtained by sampling, sampling result is (ray_num, point_num, 9), (depth) (ray_num, point_num)
     # TODO: fine-network输入的point_num是192，会产生影响吗？
-    def forward(self, pts:torch.Tensor) -> torch.Tensor:
+    def forward(self, pts:torch.Tensor, out_say = False) -> torch.Tensor:
+        if out_say:
+            print("Start!")
         flat_batch = pts.shape[0] * pts.shape[1]
         position_dim, direction_dim = 6 * self.position_flevel, 6 * self.direction_flevel
         encoded_x:torch.Tensor = torch.zeros(flat_batch, position_dim).cuda()
@@ -83,6 +85,8 @@ class NeRF(nn.Module):
         encoded_x = self.lin_block2(encoded_x)
         opacity = self.opacity_head(encoded_x)
         rgb = self.rgb_layer(torch.cat((encoded_x, encoded_r), dim = -1))
+        if out_say:
+            print("End!")
         return torch.cat((rgb, opacity), dim = -1)      # output (ray_num, point_num, 4)
 
     # rays is of shape (ray_num, 6)

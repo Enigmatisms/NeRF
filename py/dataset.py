@@ -16,7 +16,7 @@ from torch.utils import data
 DATASET_PREFIX = "../../dataset/nerf_synthetic/"
 
 class CustomDataSet(data.Dataset):
-    def __init__(self, root_dir, transform, is_train = True):
+    def __init__(self, root_dir, transform, is_train = True, use_alpha = False):
         self.is_train = is_train
         self.root_dir = root_dir
         self.main_dir = root_dir + ("train/" if is_train else "test/")
@@ -25,13 +25,15 @@ class CustomDataSet(data.Dataset):
         img_names = filter(lambda x: x.endswith("png"), os.listdir(self.main_dir))
         all_imgs = [name for name in img_names]
         self.total_imgs = natsort.natsorted(all_imgs)
+        self.use_alpha = use_alpha
 
     def __len__(self):
         return len(self.total_imgs)
 
     def __getitem__(self, idx):
         img_loc = os.path.join(self.main_dir, self.total_imgs[idx])
-        image = Image.open(img_loc).convert("RGB")
+        image = Image.open(img_loc, mode = 'r').convert("RGBA" if self.use_alpha else "RGB")
+        print(image.mode, image.size)
         tensor_image = self.transform(image)
         return tensor_image
 
@@ -44,7 +46,7 @@ class CustomDataSet(data.Dataset):
         tf_np = np.stack([frame["transform_matrix"] for frame in items["frames"]], axis = 0)
         tfs = torch.from_numpy(tf_np)
         return cam_fov, tfs.float()
-
+        
     def getCameraParam(self):
         json_file = "%stransforms_%s.json"%(self.root_dir, "train" if self.is_train else "test")
         return CustomDataSet.readFromJson(json_file)
@@ -56,7 +58,7 @@ class CustomDataSet(data.Dataset):
         result = []
         for img_name in self.total_imgs:
             img_loc = os.path.join(self.main_dir, img_name)
-            image = Image.open(img_loc).convert("RGB")
+            image = Image.open(img_loc).convert("RGBA" if self.use_alpha else "RGB")
             result.append(self.transform(image))
         cam_fov, tfs = self.getCameraParam()
         if to_cuda:

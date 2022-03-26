@@ -1,7 +1,8 @@
-#include "sampling.h"
-#include "pe.hpp"
-#include "inv_tf_sampler.h"
-#include "deterministic_sampler.h"
+#include "sampling.cuh"
+#include "pe.cuh"
+#include "inv_tf_sampler.cuh"
+#include "deterministic_sampler.cuh"
+#include "valid_sampler.cuh"
 #include <torch/extension.h>
 
 const std::string conservative_sampler_docs = 
@@ -70,6 +71,22 @@ const std::string image_sampler_doc =
 	"far:float				maximum distance from camera origin (meter)\n"
 ;
 
+const std::string valid_sampler_doc = 
+	"Sampler that only samples pixels with > 0 alpha value\n\n"
+	"rbg:torch.Tensor		(valid_pnum, 3) rgb values from each valid pixel\n"
+	"coords:torch.Tensor	(valid_pnum, 3) (x, y) coords of the sampled point and one camera index indicating the origin\n"
+	"tf:torch.Tensor		(3, 4) float Tensor, R(3 * 3) and t(3 * 1), the pose of the camera\n"
+	"output:torch.Tensor	Sampled points in shape (H, W, pnum, 6) \n"
+	"lengths:torch.Tensor	Sampled z values of each point in shape (H, W, pnum)\n"
+	"img_w:int				image width in pixel\n"
+	"img_h:int				image height in pixel\n"
+	"sampled_ray_num:int	Number of rays to sample\n"
+	"sampled_pnum:int	    points per ray to sample\n"
+	"focal:float			Focal length camera intrinsic\n"
+	"near:float				minimum distance from camera origin (meter)\n"
+	"far:float				maximum distance from camera origin (meter)\n"
+;
+
 PYBIND11_MODULE (TORCH_EXTENSION_NAME, nerf_helper)
 {
   	nerf_helper.def ("comservativeSampling", &cudaSampler, conservative_sampler_docs.c_str());
@@ -78,4 +95,5 @@ PYBIND11_MODULE (TORCH_EXTENSION_NAME, nerf_helper)
 	nerf_helper.def ("invTransformSample", &inverseTransformSample, inv_tf_docs.c_str());
 	nerf_helper.def ("invTransformSamplePt", &inverseTransformSamplePt, inv_tf_pt_docs.c_str());
 	nerf_helper.def ("imageSampling", &imageSampler, image_sampler_doc.c_str());
+	nerf_helper.def ("validSampling", &validSampler, valid_sampler_doc.c_str());
 }

@@ -12,6 +12,7 @@ setup(
                 'src/inv_tf_sampler.cu',
                 'src/inv_tf_sampler_pt.cu',
                 'src/deterministic_sampler.cu',
+                'src/valid_sampler.cu',
                 'src/sampling.cu',
                 'src/pe.cu'
             ],

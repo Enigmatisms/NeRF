@@ -1,5 +1,5 @@
 /**
- * @file inv_tf_sampler.h
+ * @file inv_tf_sampler.cuh
  * @author Enigmatisms
  * @brief Inverse transform sampling used before fine network
  * @date 2022-03-20
@@ -25,7 +25,7 @@ __host__ void inverseTransformSamplePt(
 
 __global__ void inverseTransformSampleKernel(
     const float* const weights, float* output, curandState* r_states,
-    int coarse_bins, int offset, float near, float resolution
+    int coarse_bins, int offset, int r_offset, float near, float resolution
 );
 
 __host__ void inverseTransformSample(

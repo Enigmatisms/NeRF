@@ -1,5 +1,5 @@
 /**
- * @file sampling.h
+ * @file sampling.cuh
  * @author Enigmatisms
  * @brief Randomized sampler, used in training phase to conserve GPU memory
  * @date 2022-03-17
@@ -32,7 +32,7 @@ __host__ void cudaSampler(
 
 __global__ void easySamplerKernel(
     const float *const imgs, const float* const params, float *output, float *lengths,
-    curandState *r_state, int cam_num, int width, int height, int offset, float focal, float near_t = 0.0, float resolution = 0.0
+    curandState *r_state, int cam_num, int width, int height, int offset, int r_offset, float focal, float near_t = 0.0, float resolution = 0.0
 );
 
 __host__ void easySampler(

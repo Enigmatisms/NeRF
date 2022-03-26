@@ -1,6 +1,6 @@
 #include <Eigen/Core>
-#include "error_check.hpp"
-#include "inv_tf_sampler.h"
+#include "error_check.cuh"
+#include "inv_tf_sampler.cuh"
 /// ============================== @deprecated module ==============================
 /// shape of weights: (ray_num, point_num(64))
 /// shape of pts (ray_num, 6) 6---> (相机t（相机光心原点），光线方向)

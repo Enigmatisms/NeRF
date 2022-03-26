@@ -1,6 +1,6 @@
 #include <Eigen/Core>
-#include "error_check.hpp"
-#include "sampling.h"
+#include "error_check.cuh"
+#include "sampling.cuh"
 
 /// offset is used in multi-stream concurrency
 /// params is (ray_num, 3, 4)
@@ -86,14 +86,14 @@ void cudaSampler(
 /// Here, transformation matrix is pure rotation, with unknown intrinsics
 __global__ void easySamplerKernel(
     const float *const imgs, const float* const params, float *output, float *lengths,
-    curandState *r_state, int cam_num, int width, int height, int offset, float focal, float near_t, float resolution
+    curandState *r_state, int cam_num, int width, int height, int offset, int r_offset, float focal, float near_t, float resolution
 ) {
     extern __shared__ float transforms[];           /// 9 floats for RK^{-1}, 3 floats for t, 3 floats for RGB value, 1 int for sampled_id 
     int* sample_id = (int*)(transforms + 15);
     const int ray_id = blockIdx.x + offset, bin_id = threadIdx.x, bin_num = blockDim.x, image_size = width * height;
     const int state_id = ray_id * bin_num + bin_id;
     int cam_id = 0, row_id = 0, col_id = 0, id_in_img = 0;
-    curand_init(state_id, 0, 0, &r_state[state_id]);
+    curand_init(state_id, 0, r_offset, &r_state[state_id]);
     if (bin_id == 0) {
         *sample_id = curand(&r_state[state_id]) % (cam_num * image_size);
         cam_id = *sample_id / (image_size);
@@ -144,6 +144,7 @@ void easySampler(
     at::Tensor imgs, at::Tensor tfs, at::Tensor output, at::Tensor lengths,
     int sample_ray_num, int sample_bin_num, float focal, float near_t, float far_t
 ) {
+    static int r_state_cnt = 0;
     curandState *rand_states;
     const int batch_size = imgs.size(0), width = imgs.size(3), height = imgs.size(2);
     CUDA_CHECK_RETURN(cudaMalloc((void **)&rand_states, sample_ray_num * sample_bin_num * sizeof(curandState)));
@@ -161,9 +162,10 @@ void easySampler(
     int cascade_num = sample_ray_num >> 6;      // sample_ray_num / 16
     for (int i = 0; i < cascade_num; i++) {
         easySamplerKernel <<< 64, sample_bin_num, 16 * sizeof(float), streams[i % 16]>>> (
-            img_data, param_data, output_data, length_data, rand_states, batch_size, width, height, i << 6, focal, near_t, resolution
+            img_data, param_data, output_data, length_data, rand_states, batch_size, width, height, i << 6, r_state_cnt, focal, near_t, resolution
         );
     }
+    r_state_cnt++;
     CUDA_CHECK_RETURN(cudaDeviceSynchronize());
     for (int i = 0; i < 16; i++)
         cudaStreamDestroy(streams[i]);

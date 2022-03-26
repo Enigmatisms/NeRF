@@ -17,14 +17,18 @@ tf_func = transforms.ToTensor()
     
 def loadSceneTest(path:str, is_train:bool):
     # do not shuffle images when training, since the information of each image is sorted
-    image_folder = CustomDataSet(path, transform = tf_func, is_train = is_train)
+    image_folder = CustomDataSet(path, transform = tf_func, is_train = is_train, use_alpha = True)
     cam_fov, tfs, all_imgs = image_folder.get_dataset(False)
-    image = image_folder[4][0]
-    for i in range(800):
-        for j in range(800):
-            print("%.2lf"%(image[i, j].item()), end = ', ')
-        print('\n', end='')
+    image = image_folder[4][3]
+    # for i in range(800):
+    #     for j in range(800):
+    #         print("%.2lf"%(image[i, j].item()), end = ', ')
+    #     print('\n', end='')
     save_image(image_folder[4], "../output/test1.png", "png")
+    image_data, coords, index = CustomDataSet.getValidSamples(all_imgs)
+    print(image_data.shape) 
+    print(coords.shape)
+    print(index.shape)
     print(all_imgs.shape)
     for i in range(3):
         plt.subplot(1, 3, i + 1)
@@ -33,4 +37,4 @@ def loadSceneTest(path:str, is_train:bool):
 
 if __name__ == "__main__":
     # readFromJson(DATASET_PREFIX + "drums/transforms_train.json")
-    loadSceneTest(DATASET_PREFIX + "drums/", False)
+    loadSceneTest(DATASET_PREFIX + "drums/", True)

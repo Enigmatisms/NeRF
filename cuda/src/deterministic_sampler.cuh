@@ -1,5 +1,5 @@
 /**
- * @file deterministic_sampler.h
+ * @file deterministic_sampler.cuh
  * @author Enigmatisms
  * @brief Non-random sampling, usually involves in the testing phase, in which the whole image plane should be sampled
  * @date 2022-03-23
@@ -17,7 +17,7 @@
 /// for testing, 4-8 images being sampled at the same time is recommended
 __global__ void imageSamplerKernel(
     const float* const params, float *output, float *lengths, curandState *r_state,
-    int width, int height, int offset_x, int offset_y, float focal, float near_t = 0.0, float resolution = 0.0
+    int width, int height, int offset_x, int offset_y, int r_offset, float focal, float near_t = 0.0, float resolution = 0.0
 );
 
 __host__ void imageSampler(

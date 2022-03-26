@@ -1,6 +1,6 @@
 #include <Eigen/Core>
-#include "error_check.hpp"
-#include "deterministic_sampler.h"
+#include "error_check.cuh"
+#include "deterministic_sampler.cuh"
 
 /// 先不用考虑太复杂的情况，实现上不同的地方在于：
 /// 全图采样不需要RGB输入，输出是(H, W, point_num, 6)，个人不准备实现更大的batch操作，一是没必要，GPU本身就没有那么大的并行度，二是更加麻烦
@@ -11,14 +11,14 @@
 /// 需要大量allocate random state吗？可以测试一下，由于每次运行kernel，只会运行block大小，那么randomState在开始前创建，执行完销毁
 __global__ void imageSamplerKernel(
     const float* const params, float *output, float *lengths, curandState *r_state,
-    int width, int height, int offset_x, int offset_y, float focal, float near_t, float resolution
+    int width, int height, int offset_x, int offset_y, int r_offset, float focal, float near_t, float resolution
 ) {
     extern __shared__ float transform[];
     /// TODO: offsets in both dimensions are needed
     const int col_id = blockIdx.x + offset_x, row_id = blockIdx.y + offset_y, point_id = threadIdx.x, pnum = blockDim.x;
 
     const int state_id = (blockIdx.y * gridDim.x + blockIdx.x) * pnum + point_id;
-    curand_init(state_id, 0, 0, &r_state[state_id]);
+    curand_init(state_id, 0, r_offset, &r_state[state_id]);
     if (point_id < 12) {
         transform[point_id] = params[point_id];
     }
@@ -49,6 +49,7 @@ __host__ void imageSampler(
     at::Tensor tf, at::Tensor output, at::Tensor lengths, int img_w, int img_h,
     int sample_point_num, float focal, float near_t, float far_t
 ) {
+    static int r_state_offset = 0;
     const float* const tf_data = tf.data_ptr<float>();
     float* output_data = output.data_ptr<float>();
     float* length_data = lengths.data_ptr<float>();
@@ -63,10 +64,11 @@ __host__ void imageSampler(
             CUDA_CHECK_RETURN(cudaMalloc((void **)&rand_states, BLOCK_SHAPE_X * BLOCK_SHAPE_Y * sample_point_num * sizeof(curandState)));
             dim3 block_grid(BLOCK_SHAPE_X, BLOCK_SHAPE_Y);
             imageSamplerKernel <<< block_grid, sample_point_num, 12 * sizeof(float), streams[j % 16]>>> (
-                tf_data, output_data, length_data, rand_states, img_w, img_h, i * BLOCK_SHAPE_Y, j * BLOCK_SHAPE_X, focal, near_t, resolution
+                tf_data, output_data, length_data, rand_states, img_w, img_h, i * BLOCK_SHAPE_Y, j * BLOCK_SHAPE_X, r_state_offset, focal, near_t, resolution
             );
             CUDA_CHECK_RETURN(cudaFree(rand_states));       /// TODO: 这是一种提高GPU吞吐率的方法吗
         }
+        r_state_offset++;
     }
     CUDA_CHECK_RETURN(cudaDeviceSynchronize());
     for (int i = 0; i < 16; i++)

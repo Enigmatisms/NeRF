@@ -10,8 +10,8 @@ import argparse
 from torch import optim
 
 from torch import nn
-from nerf_helper import sampling, imageSampling
-from py.utils import fov2Focal, inverseSample, getSummaryWriter
+from nerf_helper import imageSampling, sampling
+from py.utils import fov2Focal, inverseSample, getSummaryWriter, validSampler, getValidSamples
 from torchvision.utils import save_image
 from py.dataset import CustomDataSet
 from py.model import NeRF
@@ -23,11 +23,11 @@ default_model_path = "./model/"
 
 parser = argparse.ArgumentParser()
 # general args
-parser.add_argument("--epochs", type = int, default = 200, help = "Training lasts for . epochs")
-parser.add_argument("--train_per_epoch", type = int, default = 35, help = "Train (sample) <x> times in one epoch")
-parser.add_argument("--sample_ray_num", type = int, default = 4096, help = "<x> rays to sample per training time")
+parser.add_argument("--epochs", type = int, default = 800, help = "Training lasts for . epochs")
+parser.add_argument("--train_per_epoch", type = int, default = 800, help = "Train (sample) <x> times in one epoch")
+parser.add_argument("--sample_ray_num", type = int, default = 1536, help = "<x> rays to sample per training time")
 parser.add_argument("--coarse_sample_pnum", type = int, default = 64, help = "Points to sample in coarse net")
-parser.add_argument("--fine_sample_pnum", type = int, default = 10, help = "Points to sample in fine net")
+parser.add_argument("--fine_sample_pnum", type = int, default = 128, help = "Points to sample in fine net")
 parser.add_argument("--eval_time", type = int, default = 4, help = "Tensorboard output interval (train time)")
 parser.add_argument("--near", type = float, default = 2., help = "Nearest sample depth")
 parser.add_argument("--far", type = float, default = 6., help = "Farthest sample depth")
@@ -91,8 +91,8 @@ def main():
     sch_f = optim.lr_scheduler.LambdaLR(opt_f, lr_lambda = preset_lr_func, last_epoch=-1)
 
     # 数据集加载
-    trainset = CustomDataSet("../dataset/nerf_synthetic/%s/"%(dataset_name), transforms.ToTensor(), True)
-    testset = CustomDataSet("../dataset/nerf_synthetic/%s/"%(dataset_name), transforms.ToTensor(), False)
+    trainset = CustomDataSet("../dataset/nerf_synthetic/%s/"%(dataset_name), transforms.ToTensor(), True, use_alpha = True)
+    testset = CustomDataSet("../dataset/nerf_synthetic/%s/"%(dataset_name), transforms.ToTensor(), False, use_alpha = False)
     cam_fov_train, train_cam_tf, train_images = trainset.get_dataset(to_cuda = True)
     cam_fov_test, test_cam_tf = testset.getCameraParam()
     train_focal = fov2Focal(cam_fov_train, 800)
@@ -103,17 +103,21 @@ def main():
     writer = getSummaryWriter(epochs, del_dir)
 
     train_cnt, test_cnt = 0, 0
-    train_timer, eval_timer, epoch_timer = Timer(5), Timer(5), Timer(3)
-    all_fine_point_num = sample_ray_num * (fine_sample_pnum + coarse_sample_pnum)
+    train_timer, eval_timer, epoch_timer, render_timer = Timer(5), Timer(5), Timer(3), Timer(16)
+    valid_pixels, valid_coords = getValidSamples(train_images)
+    del train_images
+    torch.cuda.empty_cache()
     for ep in range(epochs):
         epoch_timer.tic()
         coarse_net.train()
         fine_net.train()
         for i in range(train_per_epoch):
-            train_timer.tic()
-            coarse_samples:torch.Tensor = torch.zeros(sample_ray_num, coarse_sample_pnum + 1, 9, dtype = torch.float32).cuda()
-            coarse_lengths:torch.Tensor = torch.zeros(sample_ray_num, coarse_sample_pnum, dtype = torch.float32).cuda()
-            sampling(train_images, train_cam_tf, coarse_samples, coarse_lengths, sample_ray_num, coarse_sample_pnum, train_focal, near_t, far_t)
+            coarse_samples, coarse_lengths = validSampler(
+                valid_pixels, valid_coords, train_cam_tf, sample_ray_num, coarse_sample_pnum, 800, 800, train_focal, near_t, far_t
+            )
+            # coarse_samples:torch.Tensor = torch.zeros(sample_ray_num, coarse_sample_pnum + 1, 9, dtype = torch.float32).cuda()
+            # coarse_lengths:torch.Tensor = torch.zeros(sample_ray_num, coarse_sample_pnum, dtype = torch.float32).cuda()
+            # sampling(train_images, train_cam_tf, coarse_samples, coarse_lengths, sample_ray_num, coarse_sample_pnum, train_focal, near_t, far_t)
             coarse_cams = coarse_samples[:, -1, :-3].contiguous()
             coarse_samples = coarse_samples[:, :-1, :].contiguous()
             coarse_rgbo = coarse_net.forward(coarse_samples)
@@ -122,9 +126,10 @@ def main():
             fine_samples, fine_lengths = inverseSample(normed_weights, coarse_cams, fine_sample_pnum, near_t, far_t)
             fine_samples, fine_lengths = NeRF.coarseFineMerge(coarse_cams, coarse_lengths, fine_lengths)      # (ray_num, 192, 6)
             # 此处存在逻辑问题，需要第二次sort，并且RGB需要整理出来
+            train_timer.tic()
             fine_rgbo = fine_net.forward(fine_samples)
             fine_rendered, _ = NeRF.render(fine_rgbo, fine_lengths)
-            print(coarse_samples[:, 0, -3:])
+            train_timer.toc()
             loss = loss + loss_func(fine_rendered, coarse_samples[:, 0, -3:])
             
             opt_c.zero_grad()
@@ -135,7 +140,6 @@ def main():
 
             sch_c.step()
             sch_f.step()
-            train_timer.toc()
 
             if train_cnt % eval_time == 1:
                 # ========= Evaluation output ========
@@ -148,27 +152,29 @@ def main():
             train_cnt += 1
 
         # model.eval()
+        fine_net.eval()
         with torch.no_grad():
             ## +++++++++++ Load from Test set ++++++++=
             eval_timer.tic()
-            fine_net = fine_net.eval()
             image_input = testset[0].cuda()
             image_sampled = torch.zeros(800, 800, fine_sample_pnum, 6, dtype = torch.float32).cuda()
             image_lengths = torch.zeros(800, 800, fine_sample_pnum, dtype = torch.float32).cuda()
-            imageSampling(test_cam_tf[0], image_sampled, image_lengths, 800, 800, fine_sample_pnum, test_focal, near_t, far_t)
+            imageSampling(train_cam_tf[0], image_sampled, image_lengths, 800, 800, fine_sample_pnum, test_focal, near_t, far_t)
             resulting_image = torch.zeros_like(image_input, dtype = torch.float32).cuda()
             for k in range(16):
                 for j in range(16):
-                    output_rgbo = fine_net.forward(image_sampled[50*k:50*(k+1), 50*j:50*(j+1)].reshape(-1, fine_sample_pnum, 6))
+                    render_timer.tic()
+                    output_rgbo = fine_net.forward(image_sampled[(50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1))].reshape(-1, fine_sample_pnum, 6))
                     part_image, _ = NeRF.render(
-                        output_rgbo, image_lengths[50*k:50*(k+1), 50*j:50*(j+1)].reshape(-1, fine_sample_pnum)
+                        output_rgbo, image_lengths[50 * k:50 * (k + 1), 50 * j:50 * (j + 1)].reshape(-1, fine_sample_pnum)
                     )          # originally outputs (2500, 3) -> (reshape) (50, 50, 3) -> (to image) (3, 50, 50)
-                    resulting_image[:, 50*k:50*(k+1), 50*j:50*(j+1)] = part_image.view(50, 50, 3).permute(2, 0, 1)
+                    render_timer.toc()
+                    resulting_image[:, 50 * k:50 * (k + 1), 50 * j:50 * (j + 1)] = part_image.view(50, 50, 3).permute(2, 0, 1)
             test_loss = loss_func(resulting_image, image_input)
             eval_timer.toc()
             writer.add_scalar('Test Loss', loss, test_cnt)
-            print("Evaluation in epoch: %4d / %4d\t, test counter: %d test loss: %.4f\taverage time: %.4lf\tremaining eval time:%s"%(
-                    ep, epochs, test_cnt, test_loss.item(), eval_timer.get_mean_time(), eval_timer.remaining_time(epochs - ep - 1)
+            print("Evaluation in epoch: %4d / %4d\t, test counter: %d test loss: %.4f\taverage time: %.4lf\tavg render time:%lf\tremaining eval time:%s"%(
+                    ep, epochs, test_cnt, test_loss.item(), eval_timer.get_mean_time(), render_timer.get_mean_time(), eval_timer.remaining_time(epochs - ep - 1)
             ))
             save_image(resulting_image, "./output/result_%03d.png"%(test_cnt), "png")
             # ======== Saving checkpoints ========

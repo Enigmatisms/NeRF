@@ -1,5 +1,5 @@
 /**
- * @file pe.hpp
+ * @file pe.cuh
  * @author Enigmatisms
  * @brief Sinusoidal positional encoding implemented in CUDA
  * @date 2022-03-19

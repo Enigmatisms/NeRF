@@ -1,17 +1,17 @@
 #include <Eigen/Core>
-#include "error_check.hpp"
-#include "inv_tf_sampler.h"
+#include "error_check.cuh"
+#include "inv_tf_sampler.cuh"
 
 /// shape of weights: (ray_num, point_num(64)), information about rays is not needed
 /// shape of output (ray_num, point_num(128)) length from point to camera origin
 __global__ void inverseTransformSampleKernel(
     const float* const weights, float* output, curandState* r_states,
-    int coarse_bins, int offset, float near, float resolution
+    int coarse_bins, int offset, int r_offset, float near, float resolution
 ) {
     extern __shared__ float data[];         /// length: output_pnum + 6 
     const int ray_id = offset + blockIdx.x, pt_id = threadIdx.x, output_pnum = blockDim.x;
     const int state_id = ray_id * output_pnum + pt_id;
-    curand_init(state_id, 0, 0, &r_states[state_id]);
+    curand_init(state_id, 0, r_offset, &r_states[state_id]);
     const float weight = curand_uniform(&r_states[state_id]);
     /// e.g: 128 pts for fine network and 64 pts for the coarse, data is the same as concatenating two identical copy of weight
     data[pt_id] = weights[ray_id * coarse_bins + (pt_id % coarse_bins)];
@@ -30,6 +30,7 @@ __global__ void inverseTransformSampleKernel(
 __host__ void inverseTransformSample(
     at::Tensor weights, at::Tensor output, int sampled_pnum, float near, float far
 ) {
+    static int r_state_offset = 0;
     curandState *rand_states;
     const int ray_num = weights.size(0), coarse_pnum = weights.size(1);
     CUDA_CHECK_RETURN(cudaMalloc((void **)&rand_states, ray_num * sampled_pnum * sizeof(curandState)));
@@ -44,7 +45,7 @@ __host__ void inverseTransformSample(
         int cascade_num = ray_num >> 7;      // sample_ray_num / 16
         for (int i = 0; i < cascade_num; i++) {
             inverseTransformSampleKernel <<< 128, sampled_pnum, sampled_pnum * sizeof(float), streams[i % 16]>>> (
-                weight_data, output_data, rand_states, coarse_pnum, i << 7, near, resolution
+                weight_data, output_data, rand_states, coarse_pnum, i << 7, r_state_offset, near, resolution
             );
         }
         CUDA_CHECK_RETURN(cudaDeviceSynchronize());
@@ -52,9 +53,10 @@ __host__ void inverseTransformSample(
             cudaStreamDestroy(streams[i]);
     } else {
         inverseTransformSampleKernel <<< 16, sampled_pnum, sampled_pnum * sizeof(float)>>> (
-            weight_data, output_data, rand_states, coarse_pnum, 0, near, resolution
+            weight_data, output_data, rand_states, coarse_pnum, 0, r_state_offset, near, resolution
         );
         CUDA_CHECK_RETURN(cudaDeviceSynchronize());
     }
+    r_state_offset++;
     CUDA_CHECK_RETURN(cudaFree(rand_states));
 }

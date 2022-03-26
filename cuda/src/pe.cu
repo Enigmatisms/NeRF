@@ -1,5 +1,5 @@
-#include "pe.hpp"
-#include "error_check.hpp"
+#include "pe.cuh"
+#include "error_check.cuh"
 
 constexpr float PI = 3.14159265358979f;
 
