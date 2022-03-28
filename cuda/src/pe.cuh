@@ -20,5 +20,5 @@ __global__ void peKernel(
 
 /// Main kernel function for positional encoding
 __host__ void positionalEncode(
-    at::Tensor input, at::Tensor output, int flevel_num, bool normalize = true
+    at::Tensor input, at::Tensor output, int flevel_num, bool normalize = false
 );

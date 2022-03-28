@@ -16,7 +16,6 @@ __global__ void imageSamplerKernel(
     extern __shared__ float transform[];
     /// TODO: offsets in both dimensions are needed
     const int col_id = blockIdx.x + offset_x, row_id = blockIdx.y + offset_y, point_id = threadIdx.x, pnum = blockDim.x;
-
     const int state_id = (blockIdx.y * gridDim.x + blockIdx.x) * pnum + point_id;
     curand_init(state_id, 0, r_offset, &r_state[state_id]);
     if (point_id < 12) {
@@ -27,8 +26,8 @@ __global__ void imageSamplerKernel(
     Eigen::Vector3f t;
     T << transform[0], transform[1], transform[2], transform[4], transform[5], transform[6], transform[8], transform[9], transform[10];
     t << transform[3], transform[7], transform[11];
-    Eigen::Vector3f raw_dir = T * Eigen::Vector3f(float(col_id - width >> 1) / focal, float((height >> 1) - row_id) / focal, -1.0);
-    raw_dir = (raw_dir / raw_dir.norm()).eval();            // normalized direction in world frame
+    const Eigen::Vector3f raw_dir = T * Eigen::Vector3f(float(col_id - (width >> 1)) / focal, float((height >> 1) - row_id) / focal, -1.0);
+    // raw_dir = (raw_dir / raw_dir.norm()).eval();            // normalized direction in world frame
     float sample_depth = near_t + resolution * point_id + curand_uniform(&r_state[state_id]) * resolution;
     // output shape (ray_num, point num, 9) (9 dims per point)
     const int point_base = (row_id * width + col_id) * pnum + point_id;
@@ -64,7 +63,7 @@ __host__ void imageSampler(
             CUDA_CHECK_RETURN(cudaMalloc((void **)&rand_states, BLOCK_SHAPE_X * BLOCK_SHAPE_Y * sample_point_num * sizeof(curandState)));
             dim3 block_grid(BLOCK_SHAPE_X, BLOCK_SHAPE_Y);
             imageSamplerKernel <<< block_grid, sample_point_num, 12 * sizeof(float), streams[j % 16]>>> (
-                tf_data, output_data, length_data, rand_states, img_w, img_h, i * BLOCK_SHAPE_Y, j * BLOCK_SHAPE_X, r_state_offset, focal, near_t, resolution
+                tf_data, output_data, length_data, rand_states, img_w, img_h, j * BLOCK_SHAPE_X, i * BLOCK_SHAPE_Y, r_state_offset, focal, near_t, resolution
             );
             CUDA_CHECK_RETURN(cudaFree(rand_states));       /// TODO: 这是一种提高GPU吞吐率的方法吗
         }

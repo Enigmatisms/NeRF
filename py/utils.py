@@ -54,7 +54,7 @@ def inverseSample(weights:torch.Tensor, rays:torch.Tensor, sample_pnum:int, near
     return raw_pts, sort_depth          # depth is used for rendering
 
 # Extract samples of which alpha is bigger than a threshold
-def getValidSamples(images:torch.Tensor) -> torch.Tensor:
+def getValidSamples(images:torch.Tensor, invalid_threshold:float = 0.) -> torch.Tensor:
     image_result = []
     coord_result = []
     index_result = []
@@ -64,6 +64,8 @@ def getValidSamples(images:torch.Tensor) -> torch.Tensor:
     coords = torch.stack((row_idxs, col_idxs), dim = -1).cuda()        # shape (rows, cols, 2) --> image coordinates 
     for i, pic in enumerate(images):
         bools = pic[3] > 1e-3
+        invalids = (~bools) & (torch.normal(0, 1, bools.shape).cuda() > invalid_threshold)
+        bools = (bools | invalids)          # add some of the invalid points (if invalid_threshold == 0, this means half of the invalid points are added)
         valid_samples = pic[:3, bools].transpose(0, 1)
         valid_coords = coords[bools]
         index = torch.ones(valid_samples.shape[0]) * i

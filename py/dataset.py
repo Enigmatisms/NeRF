@@ -44,7 +44,7 @@ class CustomDataSet(data.Dataset):
         cam_fov = items["camera_angle_x"]
         print("Camera fov: %lf"%(cam_fov))
         tf_np = np.stack([frame["transform_matrix"] for frame in items["frames"]], axis = 0)
-        tfs = torch.from_numpy(tf_np)
+        tfs = torch.from_numpy(tf_np)[:, :3, :]
         return cam_fov, tfs.float()
         
     def getCameraParam(self):

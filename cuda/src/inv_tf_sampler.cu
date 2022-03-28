@@ -36,7 +36,7 @@ __host__ void inverseTransformSample(
     CUDA_CHECK_RETURN(cudaMalloc((void **)&rand_states, ray_num * sampled_pnum * sizeof(curandState)));
     const float* const weight_data = weights.data_ptr<float>();
     float* output_data = output.data_ptr<float>();
-    const float resolution = (far - near) / float(sampled_pnum);
+    const float resolution = (far - near) / float(coarse_pnum);
     cudaStream_t streams[16];
     if (ray_num > 16) {
         for (int i = 0; i < 16; i++)

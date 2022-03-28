@@ -31,8 +31,8 @@ __global__ void validSamplerKernel(
     Eigen::Vector3f t;
     T << transforms[0], transforms[1], transforms[2], transforms[4], transforms[5], transforms[6], transforms[8], transforms[9], transforms[10];
     t << transforms[3], transforms[7], transforms[11];
-    Eigen::Vector3f raw_dir = T * Eigen::Vector3f(float(col_id - width >> 1) / focal, float((height >> 1) - row_id) / focal, -1.0);
-    raw_dir = (raw_dir / raw_dir.norm()).eval();            // normalized direction in world frame
+    const Eigen::Vector3f raw_dir = T * Eigen::Vector3f(float(col_id - (width >> 1)) / focal, float((height >> 1) - row_id) / focal, -1.0);
+    // raw_dir = (raw_dir / raw_dir.norm()).eval();            // normalized direction in world frame
     float sample_depth = near_t + resolution * bin_id + curand_uniform(&r_state[state_id]) * resolution;
     // output shape (ray_num, point num + 1, 9) (9 dims per point), length is of shape (ray_num, point_num) (no plus 1)
     const int ray_base = ray_id * bin_num, total_base = (ray_base + ray_id + bin_id) * 9;
@@ -50,7 +50,7 @@ __global__ void validSamplerKernel(
          for (int i = 0; i < 3; i++) {
             output[end_base + i] = t(i);                      // point origin
             output[end_base + i + 3] = raw_dir(i);            // normalized direction
-            output[end_base + i + 6] = 0;                     // rgb value
+            output[end_base + i + 6] = transforms[12 + i];    // rgb value
         }
     }
     __syncthreads();

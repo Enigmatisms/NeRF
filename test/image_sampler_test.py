@@ -40,7 +40,7 @@ if __name__ == "__main__":
     imageSampling(tf, output, lengths, IMAGE_SIZE, IMAGE_SIZE, POINT_TO_SAMPLE, focal, NEAR_T, FAR_T)
     rgbo = nerf.forward(output[:64, :64].reshape(-1, POINT_TO_SAMPLE, 6))
     part_image, _ = NeRF.render(
-        rgbo, lengths[:64, :64].reshape(-1, POINT_TO_SAMPLE)
+        rgbo, lengths[:64, :64].reshape(-1, POINT_TO_SAMPLE), output[:, :, 3:6].norm(dim = -1)
     ) 
     loss = loss_func(part_image, torch.normal(0, 1, part_image.shape).cuda())
     opt.zero_grad()
@@ -59,7 +59,8 @@ if __name__ == "__main__":
                 timer.tic()
                 a = nerf.forward(output[50 * i:50 * (i + 1), 50 * j:50 * (j + 1)].reshape(-1, POINT_TO_SAMPLE, 6))
                 part_image, _ = NeRF.render(
-                    a, lengths[50 * i:50 * (i + 1), 50 * j:50 * (j + 1)].reshape(-1, POINT_TO_SAMPLE)
+                    a, lengths[50 * i:50 * (i + 1), 50 * j:50 * (j + 1)].reshape(-1, POINT_TO_SAMPLE),
+                    output[:, :, 3:6].norm(dim = -1)
                 )          # originally outputs (2500, 3) -> (reshape) (50, 50, 3) -> (to image) (3, 50, 50)
                 timer.toc()
                 resulting_image[:, 50 * i:50 * (i + 1), 50 * j:50 * (j + 1)] = part_image.view(50, 50, 3).permute(2, 0, 1)

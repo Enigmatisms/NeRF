@@ -13,7 +13,11 @@ import sys
 sys.path.append("..")
 from py.dataset import CustomDataSet, DATASET_PREFIX
 
-tf_func = transforms.ToTensor()
+tf_func = transforms.Compose([
+    transforms.Resize((400, 400)),
+    transforms.ToTensor(),
+])
+
     
 def loadSceneTest(path:str, is_train:bool):
     # do not shuffle images when training, since the information of each image is sorted
@@ -25,10 +29,6 @@ def loadSceneTest(path:str, is_train:bool):
     #         print("%.2lf"%(image[i, j].item()), end = ', ')
     #     print('\n', end='')
     save_image(image_folder[4], "../output/test1.png", "png")
-    image_data, coords, index = CustomDataSet.getValidSamples(all_imgs)
-    print(image_data.shape) 
-    print(coords.shape)
-    print(index.shape)
     print(all_imgs.shape)
     for i in range(3):
         plt.subplot(1, 3, i + 1)

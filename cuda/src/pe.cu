@@ -12,7 +12,7 @@ __global__ void peKernel(
     extern __shared__ float pt_val[];
     const int freq_id = threadIdx.x, point_id = blockIdx.x + offset, freq_num = blockDim.x;
     const int input_base = point_id * 3, output_base = (input_base * freq_num) << 1;
-    float normalize_sum = 0.0;
+    float normalize_sum = 1e-9;
     if (USE_GLOBAL == false) {
         if (freq_id < 3) {
             pt_val[freq_id] = input[input_base + freq_id];
