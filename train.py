@@ -24,7 +24,7 @@ default_model_path = "./model/"
 parser = argparse.ArgumentParser()
 # general args
 parser.add_argument("--epochs", type = int, default = 800, help = "Training lasts for . epochs")
-parser.add_argument("--train_per_epoch", type = int, default = 500, help = "Train (sample) <x> times in one epoch")
+parser.add_argument("--train_per_epoch", type = int, default = 600, help = "Train (sample) <x> times in one epoch")
 parser.add_argument("--sample_ray_num", type = int, default = 2048, help = "<x> rays to sample per training time")
 parser.add_argument("--coarse_sample_pnum", type = int, default = 64, help = "Points to sample in coarse net")
 parser.add_argument("--fine_sample_pnum", type = int, default = 128, help = "Points to sample in fine net")
@@ -34,8 +34,8 @@ parser.add_argument("--far", type = float, default = 6., help = "Farthest sample
 parser.add_argument("--name", type = str, default = "model_1", help = "Model name for loading")
 parser.add_argument("--dataset_name", type = str, default = "lego", help = "Input dataset name in nerf synthetic dataset")
 # opt related
-parser.add_argument("--min_ratio", type = float, default = 0.1, help = "lr exponential decay, final / intial min ratio")
-parser.add_argument("--alpha", type = float, default = 0.99994, help = "lr exponential decay rate")
+parser.add_argument("--min_ratio", type = float, default = 0.05, help = "lr exponential decay, final / intial min ratio")
+parser.add_argument("--alpha", type = float, default = 0.99996, help = "lr exponential decay rate")
 # bool options
 parser.add_argument("-d", "--del_dir", default = False, action = "store_true", help = "Delete dir ./logs and start new tensorboard records")
 parser.add_argument("-l", "--load", default = False, action = "store_true", help = "Load checkpoint or trained model.")
@@ -53,8 +53,8 @@ def main():
 
     eval_time           = args.eval_time
     dataset_name        = args.dataset_name
-    load_path_coarse    = default_model_path + args.name + "_coarse.pth"
-    load_path_fine      = default_model_path + args.name + "_fine.pth"
+    load_path_coarse    = default_chkpt_path + args.name + "_coarse.pt"
+    load_path_fine      = default_chkpt_path + args.name + "_fine.pt"
     # Bool options
     del_dir             = args.del_dir
     use_load            = args.load
@@ -77,8 +77,8 @@ def main():
     loss_func = nn.MSELoss().cuda()
 
     # ======= Optimizer and scheduler ========
-    opt_c = optim.Adam(coarse_net.parameters(), lr = 4e-4, betas = (0.9, 0.999), eps = 1e-7)
-    opt_f = optim.Adam(fine_net.parameters(), lr = 4e-4, betas = (0.9, 0.999), eps = 1e-7)
+    opt_c = optim.SGD(coarse_net.parameters(), lr = 0.4, momentum=0.1, dampening=0.1)
+    opt_f = optim.SGD(fine_net.parameters(), lr = 0.4, momentum=0.1, dampening=0.1)
 
     # min_max_ratio = args.min_lr / args.max_lr
     # lec_sch_func = CosineLRScheduler(opt, t_initial = epochs // 2, t_mul = 1, lr_min = min_max_ratio, decay_rate = 0.1,
@@ -126,16 +126,17 @@ def main():
             # coarse_lengths:torch.Tensor = torch.zeros(sample_ray_num, coarse_sample_pnum, dtype = torch.float32).cuda()
             # sampling(train_images, train_cam_tf, coarse_samples, coarse_lengths, sample_ray_num, coarse_sample_pnum, train_focal, near_t, far_t)
             coarse_cams = coarse_samples[:, -1, :-3].contiguous()
+            gt_rgb = coarse_samples[:, -1, -3:].contiguous()
             coarse_samples = coarse_samples[:, :-1, :].contiguous()
             coarse_rgbo = coarse_net.forward(coarse_samples)
             coarse_rendered, normed_weights = NeRF.render(coarse_rgbo, coarse_lengths, coarse_samples[:, :, 3:6].norm(dim = -1))
-            loss = loss_func(coarse_rendered, coarse_samples[:, 0, -3:])
+            loss = loss_func(coarse_rendered, gt_rgb)
             fine_samples, fine_lengths = inverseSample(normed_weights, coarse_cams, fine_sample_pnum, near_t, far_t)
             fine_samples, fine_lengths = NeRF.coarseFineMerge(coarse_cams, coarse_lengths, fine_lengths)      # (ray_num, 192, 6)
             # 此处存在逻辑问题，需要第二次sort，并且RGB需要整理出来
             fine_rgbo = fine_net.forward(fine_samples)
             fine_rendered, _ = NeRF.render(fine_rgbo, fine_lengths, fine_samples[:, :, 3:6].norm(dim = -1))
-            loss = loss + loss_func(fine_rendered, coarse_samples[:, 0, -3:])
+            loss = loss + loss_func(fine_rendered, gt_rgb)
             train_timer.toc()
             
             opt_c.zero_grad()
@@ -143,8 +144,6 @@ def main():
             loss.backward()
             opt_c.step()
             opt_f.step()
-
-
 
             if train_cnt % eval_time == 1:
                 # ========= Evaluation output ========

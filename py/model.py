@@ -107,10 +107,10 @@ class NeRF(nn.Module):
     """
     @staticmethod
     def getNormedWeight(opacity:torch.Tensor, depth:torch.Tensor) -> torch.Tensor:
-        delta:torch.Tensor = torch.cat((depth[:, 1:] - depth[:, :-1], torch.FloatTensor([1e9]).repeat((depth.shape[0], 1)).cuda()), dim = -1)
+        delta:torch.Tensor = torch.cat((depth[:, 1:] - depth[:, :-1], torch.FloatTensor([1e10]).repeat((depth.shape[0], 1)).cuda()), dim = -1)
         # print(opacity.shape, depth[:, 1:].shape, raw_delta.shape, delta.shape)
         mult:torch.Tensor = torch.exp(-opacity * delta)
-        ts:torch.Tensor = torch.hstack((torch.ones(mult.shape[0], 1, dtype = torch.float32).cuda(), torch.cumprod(mult + 1e-9, dim = -1)[:, :-1]))
+        ts:torch.Tensor = torch.hstack((torch.ones(mult.shape[0], 1, dtype = torch.float32).cuda(), torch.cumprod(mult + 1e-10, dim = -1)[:, :-1]))
         alpha:torch.Tensor = 1. - mult
         # fusion requires normalization, rgb output should be passed through sigmoid
         weights:torch.Tensor = alpha * ts                # shape (ray_num, point_num)
@@ -123,7 +123,7 @@ class NeRF(nn.Module):
     def render(rgbo:torch.Tensor, depth:torch.Tensor, ray_norm:torch.Tensor) -> torch.Tensor:
         depth = depth * ray_norm
         rgb:torch.Tensor = rgbo[..., :3] # shape (ray_num, pnum, 3)
-        opacity:torch.Tensor = rgbo[..., -1] + 1e-8             # 1e-5 is used for eliminating numerical instability
+        opacity:torch.Tensor = rgbo[..., -1]             # 1e-5 is used for eliminating numerical instability
         weights, weights_normed = NeRF.getNormedWeight(opacity, depth)
 
         weighted_rgb:torch.Tensor = weights[:, :, None] * rgb

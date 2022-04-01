@@ -123,7 +123,6 @@ __global__ void easySamplerKernel(
     lengths[ray_base + bin_id] = sample_depth;
     // sampled point origin
     Eigen::Vector3f p = raw_dir * sample_depth + t;
-    // 此处需要额外输出t以及
     for (int i = 0; i < 3; i++) {
         output[total_base + i] = p(i);                      // point origin
         output[total_base + i + 3] = raw_dir(i);            // normalized direction
@@ -134,7 +133,7 @@ __global__ void easySamplerKernel(
          for (int i = 0; i < 3; i++) {
             output[end_base + i] = t(i);                      // point origin
             output[end_base + i + 3] = raw_dir(i);            // normalized direction
-            output[end_base + i + 6] = 0;                     // rgb value
+            output[end_base + i + 6] = transforms[12 + i];                     // rgb value
         }
     }
     __syncthreads();

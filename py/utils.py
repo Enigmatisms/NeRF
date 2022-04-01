@@ -20,14 +20,6 @@ def getSummaryWriter(epochs:int, del_dir:bool):
     time_stamp = "{0:%Y-%m-%d/%H-%M-%S}-epoch{1}/".format(datetime.now(), epochs)
     return SummaryWriter(log_dir = logdir + time_stamp)
 
-# input weights shape: (ray_num, point_num), prefix sum should be performed in dim1
-def weightPrefixSum(weights:torch.Tensor) -> torch.Tensor:
-    result = weights.clone()
-    # print(result.shape, result[:, 0].shape)
-    for i in range(1, weights.shape[1]):
-        result[:, i] += result[:, i-1]
-    return result
-
 def generateTestSamples(ray_num:int, coarse_pnum:int, sigma_factor:float = 0.1):
     def gaussian(x:float, mean:float, std:float):
         return 1./(np.sqrt(2 * np.pi) * std) * np.exp(-((x - mean)**2) / (2 * std ** 2))
@@ -43,7 +35,7 @@ def generateTestSamples(ray_num:int, coarse_pnum:int, sigma_factor:float = 0.1):
 def inverseSample(weights:torch.Tensor, rays:torch.Tensor, sample_pnum:int, near:float=2., far:float=6.) -> torch.Tensor:
     if weights.requires_grad == True:
         weights = weights.detach()
-    cdf = weightPrefixSum(weights)
+    cdf = torch.cumsum(weights, dim = -1)
     sample_depth = torch.zeros(rays.shape[0], sample_pnum).float().cuda()
     invTransformSample(cdf, sample_depth, sample_pnum, near, far)
     sort_depth, _ = torch.sort(sample_depth, dim = -1)          # shape (ray_num, sample_pnum)

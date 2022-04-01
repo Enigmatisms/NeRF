@@ -17,9 +17,9 @@ __global__ void validSamplerKernel(
         for (int i = 0; i < 3; i++)
             coord_ptr[i] = coords[pixel_base + i];
         cam_id = coord_ptr[2];
-        const float* const ptr = params + 12 * cam_id;
         for (int i = 0; i < 3; i++)
             transforms[12 + i] = valid_rgb[pixel_base + i];
+        const float* const ptr = params + 12 * cam_id;
         for (int i = 0; i < 12; i++)
             transforms[i] = ptr[i];
     }

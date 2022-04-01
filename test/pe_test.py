@@ -39,13 +39,30 @@ class Embedder:
         print("Time consumption: %.6lf s"%(end_time - start_time))
         return res
 
-FLEVEL = 10
+FLEVEL = 4
+
+def encode_position(x):
+    """Encodes the position into its corresponding Fourier feature.
+
+    Args:
+        x: The input coordinate.
+
+    Returns:
+        Fourier features tensors of the position.
+    """
+    positions = [x]
+    for i in range(FLEVEL):
+        for fn in [torch.sin, torch.cos]:
+            positions.append(fn(2.0 ** i * x))
+    return torch.concat(positions, dim=-1)
 
 if __name__ == "__main__":
     emb = Embedder(FLEVEL)
-    zeros = torch.normal(0, 2, (8192, 3)).float().cuda()
+    zeros = torch.normal(0, 2, (4, 3)).float().cuda()
     res1 = emb.embed(zeros)
     print(res1, res1.shape)
+    res2 = encode_position(zeros)
+    print(res2, res2.shape)
     output = torch.zeros(zeros.shape[0], FLEVEL * 6).float().cuda()
     start_time = time()
     encoding(zeros, output, FLEVEL, False)
