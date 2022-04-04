@@ -32,13 +32,14 @@ def generateTestSamples(ray_num:int, coarse_pnum:int, sigma_factor:float = 0.1):
     return torch.cat(result, dim = 0).float().cuda()
 
 # float32. Shape of ray: (ray_num, 6) --> (origin, direction)
-def inverseSample(weights:torch.Tensor, rays:torch.Tensor, sample_pnum:int, near:float=2., far:float=6.) -> torch.Tensor:
+def inverseSample(weights:torch.Tensor, rays:torch.Tensor, coarse_depth:torch.Tensor, sample_pnum:int, near:float=2., far:float=6.) -> torch.Tensor:
     if weights.requires_grad == True:
         weights = weights.detach()
-    cdf = torch.cumsum(weights, dim = -1)
-    sample_depth = torch.zeros(rays.shape[0], sample_pnum).float().cuda()
-    invTransformSample(cdf, sample_depth, sample_pnum, near, far)
-    sort_depth, _ = torch.sort(sample_depth, dim = -1)          # shape (ray_num, sample_pnum)
+    # cdf = torch.cumsum(weights, dim = -1)
+    z_vals_mid = .5 * (coarse_depth[...,1:] + coarse_depth[...,:-1])
+    z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], sample_pnum, det=False, pytest=False)
+    # invTransformSample(cdf, sample_depth, sample_pnum, near, far)
+    sort_depth, _ = torch.sort(z_samples, dim = -1)          # shape (ray_num, sample_pnum)
     # Use sort depth to calculate sampled points
     raw_pts = rays.repeat(repeats = (1, 1, sample_pnum)).view(rays.shape[0], sample_pnum, -1)
     # depth * ray_direction + origin (this should be further tested)
@@ -46,7 +47,7 @@ def inverseSample(weights:torch.Tensor, rays:torch.Tensor, sample_pnum:int, near
     return raw_pts, sort_depth          # depth is used for rendering
 
 # Extract samples of which alpha is bigger than a threshold
-def getValidSamples(images:torch.Tensor, invalid_threshold:float = 0.) -> torch.Tensor:
+def getValidSamples(images:torch.Tensor, invalid_threshold:float = -10) -> torch.Tensor:
     image_result = []
     coord_result = []
     index_result = []
@@ -76,4 +77,49 @@ def validSampler(rgbs:torch.Tensor, coords:torch.Tensor, tfs:torch.Tensor, ray_n
     return output, lengths
 
 def fov2Focal(fov:float, img_width:float) -> float:
-    return (img_width / 2) / np.tan(fov * 0.5)
+    return .5 * img_width / np.tan(.5 * fov)
+
+def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
+    # Get pdf
+    weights = weights + 1e-5 # prevent nans
+    pdf = weights / torch.sum(weights, -1, keepdim=True)
+    cdf = torch.cumsum(pdf, -1)
+    cdf = torch.cat([torch.zeros_like(cdf[...,:1]), cdf], -1)  # (batch, len(bins))
+
+    # Take uniform samples
+    if det:
+        u = torch.linspace(0., 1., steps=N_samples)
+        u = u.expand(list(cdf.shape[:-1]) + [N_samples])
+    else:
+        u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
+
+    # Pytest, overwrite u with numpy's fixed random numbers
+    if pytest:
+        np.random.seed(0)
+        new_shape = list(cdf.shape[:-1]) + [N_samples]
+        if det:
+            u = np.linspace(0., 1., N_samples)
+            u = np.broadcast_to(u, new_shape)
+        else:
+            u = np.random.rand(*new_shape)
+        u = torch.Tensor(u)
+
+    # Invert CDF
+    u = u.cuda().contiguous()
+    inds = torch.searchsorted(cdf, u, right=True)
+    below = torch.max(torch.zeros_like(inds-1), inds-1).cuda()
+    above = torch.min((cdf.shape[-1]-1) * torch.ones_like(inds).cuda(), inds)
+    inds_g = torch.stack([below, above], -1)  # (batch, N_samples, 2)
+
+    # cdf_g = tf.gather(cdf, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
+    # bins_g = tf.gather(bins, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
+    matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]
+    cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
+    bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)
+
+    denom = (cdf_g[...,1]-cdf_g[...,0])
+    denom = torch.where(denom<1e-5, torch.ones_like(denom).cuda(), denom)
+    t = (u-cdf_g[...,0])/denom
+    samples = bins_g[...,0] + t * (bins_g[...,1]-bins_g[...,0])
+
+    return samples

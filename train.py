@@ -23,9 +23,9 @@ default_model_path = "./model/"
 
 parser = argparse.ArgumentParser()
 # general args
-parser.add_argument("--epochs", type = int, default = 800, help = "Training lasts for . epochs")
+parser.add_argument("--epochs", type = int, default = 500, help = "Training lasts for . epochs")
 parser.add_argument("--train_per_epoch", type = int, default = 600, help = "Train (sample) <x> times in one epoch")
-parser.add_argument("--sample_ray_num", type = int, default = 2048, help = "<x> rays to sample per training time")
+parser.add_argument("--sample_ray_num", type = int, default = 1024, help = "<x> rays to sample per training time")
 parser.add_argument("--coarse_sample_pnum", type = int, default = 64, help = "Points to sample in coarse net")
 parser.add_argument("--fine_sample_pnum", type = int, default = 128, help = "Points to sample in fine net")
 parser.add_argument("--eval_time", type = int, default = 4, help = "Tensorboard output interval (train time)")
@@ -42,6 +42,22 @@ parser.add_argument("-l", "--load", default = False, action = "store_true", help
 parser.add_argument("-s", "--use_scaler", default = False, action = "store_true", help = "Use AMP scaler to speed up")
 args = parser.parse_args()
 
+def render_image(network:NeRF, render_pose:torch.Tensor, image_size:int, focal:float, near:float, far:float, sample_num:int=128) -> torch.Tensor:
+    image_sampled = torch.zeros(image_size, image_size, sample_num, 6, dtype = torch.float32).cuda()
+    image_lengths = torch.zeros(image_size, image_size, sample_num, dtype = torch.float32).cuda()
+    imageSampling(render_pose, image_sampled, image_lengths, image_size, image_size, sample_num, focal, near, far)
+    resulting_image = torch.zeros((3, image_size, image_size), dtype = torch.float32).cuda()
+    patch_num = image_size // 50
+    for k in range(patch_num):
+        for j in range(patch_num):
+            output_rgbo = network.forward(image_sampled[(50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1))].reshape(-1, sample_num, 6))
+            part_image, _ = NeRF.render(
+                output_rgbo, image_lengths[(50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1))].reshape(-1, sample_num),
+                image_sampled[(50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1)), :, 3:6].reshape(-1, sample_num, 3).norm(dim = -1)
+            )          # originally outputs (2500, 3) -> (reshape) (50, 50, 3) -> (to image) (3, 50, 50)
+            resulting_image[:, (50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1))] = part_image.view(50, 50, 3).permute(2, 0, 1)
+    return resulting_image
+
 def main():
     epochs              = args.epochs
     train_per_epoch     = args.train_per_epoch
@@ -53,8 +69,8 @@ def main():
 
     eval_time           = args.eval_time
     dataset_name        = args.dataset_name
-    load_path_coarse    = default_chkpt_path + args.name + "_coarse.pt"
-    load_path_fine      = default_chkpt_path + args.name + "_fine.pt"
+    load_path_coarse    = default_model_path + args.name + "_coarse.pth"
+    load_path_fine      = default_model_path + args.name + "_fine.pth"
     # Bool options
     del_dir             = args.del_dir
     use_load            = args.load
@@ -74,11 +90,12 @@ def main():
         print("Not loading or load path '%s' or '%s' does not exist."%(load_path_coarse, load_path_fine))
 
     # ======= Loss function ==========
-    loss_func = nn.MSELoss().cuda()
-
+    # loss_func = nn.MSELoss().cuda()
+    loss_func = lambda x, y : torch.mean((x - y) ** 2)
+    grad_vars = list(coarse_net.parameters())
+    grad_vars += list(fine_net.parameters())
     # ======= Optimizer and scheduler ========
-    opt_c = optim.SGD(coarse_net.parameters(), lr = 0.4, momentum=0.1, dampening=0.1)
-    opt_f = optim.SGD(fine_net.parameters(), lr = 0.4, momentum=0.1, dampening=0.1)
+    opt = optim.Adam(params = grad_vars, lr = 5e-4, betas=(0.9, 0.999))
 
     # min_max_ratio = args.min_lr / args.max_lr
     # lec_sch_func = CosineLRScheduler(opt, t_initial = epochs // 2, t_mul = 1, lr_min = min_max_ratio, decay_rate = 0.1,
@@ -87,10 +104,9 @@ def main():
         val = alpha**x
         return val if val > min_ratio else min_ratio
     preset_lr_func = partial(lr_func, alpha = args.alpha, min_ratio = args.min_ratio)
-    sch_c = optim.lr_scheduler.LambdaLR(opt_c, lr_lambda = preset_lr_func, last_epoch=-1)
-    sch_f = optim.lr_scheduler.LambdaLR(opt_f, lr_lambda = preset_lr_func, last_epoch=-1)
+    sch = optim.lr_scheduler.LambdaLR(opt, lr_lambda = preset_lr_func, last_epoch=-1)
     transform_funcs = transforms.Compose([
-        transforms.Resize((400, 400)),
+        transforms.Resize((200, 200)),
         transforms.ToTensor(),
     ])
     # 数据集加载
@@ -98,101 +114,86 @@ def main():
     testset = CustomDataSet("../dataset/nerf_synthetic/%s/"%(dataset_name), transform_funcs, False, use_alpha = False)
     cam_fov_train, train_cam_tf, train_images = trainset.get_dataset(to_cuda = True)
     cam_fov_test, test_cam_tf = testset.getCameraParam()
-    train_focal = fov2Focal(cam_fov_train, 400)
-    test_focal = fov2Focal(cam_fov_test, 400)
+    train_focal = fov2Focal(cam_fov_train, 200)
+    test_focal = fov2Focal(cam_fov_test, 200)
     test_cam_tf = test_cam_tf.cuda()
 
     # ====== tensorboard summary writer ======
     writer = getSummaryWriter(epochs, del_dir)
 
     train_cnt, test_cnt = 0, 0
-    train_timer, eval_timer, epoch_timer, render_timer = Timer(5), Timer(5), Timer(3), Timer(16)
+    train_timer, eval_timer, epoch_timer, render_timer = Timer(5), Timer(5), Timer(3), Timer(4)
     valid_pixels, valid_coords = getValidSamples(train_images)
+    print(train_cam_tf.shape, train_images.shape)
     del train_images
     torch.cuda.empty_cache()
-    print(train_cam_tf[0])
     for ep in range(epochs):
         epoch_timer.tic()
         coarse_net.train()
         fine_net.train()
         for i in range(train_per_epoch):
             train_timer.tic()
-            loss = torch.zeros(1).cuda()
-            # for _ in range(4):          # train 4 times, and then backward to complement the batch size
             coarse_samples, coarse_lengths = validSampler(
-                valid_pixels, valid_coords, train_cam_tf, sample_ray_num, coarse_sample_pnum, 400, 400, train_focal, near_t, far_t
+                valid_pixels, valid_coords, train_cam_tf, sample_ray_num, coarse_sample_pnum, 200, 200, train_focal, near_t, far_t
             )
-            # coarse_samples:torch.Tensor = torch.zeros(sample_ray_num, coarse_sample_pnum + 1, 9, dtype = torch.float32).cuda()
-            # coarse_lengths:torch.Tensor = torch.zeros(sample_ray_num, coarse_sample_pnum, dtype = torch.float32).cuda()
-            # sampling(train_images, train_cam_tf, coarse_samples, coarse_lengths, sample_ray_num, coarse_sample_pnum, train_focal, near_t, far_t)
             coarse_cams = coarse_samples[:, -1, :-3].contiguous()
             gt_rgb = coarse_samples[:, -1, -3:].contiguous()
             coarse_samples = coarse_samples[:, :-1, :].contiguous()
             coarse_rgbo = coarse_net.forward(coarse_samples)
             coarse_rendered, normed_weights = NeRF.render(coarse_rgbo, coarse_lengths, coarse_samples[:, :, 3:6].norm(dim = -1))
-            loss = loss_func(coarse_rendered, gt_rgb)
-            fine_samples, fine_lengths = inverseSample(normed_weights, coarse_cams, fine_sample_pnum, near_t, far_t)
+
+            _, fine_lengths = inverseSample(normed_weights, coarse_cams, coarse_lengths, fine_sample_pnum, near_t, far_t)
             fine_samples, fine_lengths = NeRF.coarseFineMerge(coarse_cams, coarse_lengths, fine_lengths)      # (ray_num, 192, 6)
             # 此处存在逻辑问题，需要第二次sort，并且RGB需要整理出来
             fine_rgbo = fine_net.forward(fine_samples)
             fine_rendered, _ = NeRF.render(fine_rgbo, fine_lengths, fine_samples[:, :, 3:6].norm(dim = -1))
-            loss = loss + loss_func(fine_rendered, gt_rgb)
+
+            opt.zero_grad()
+            loss:torch.Tensor = loss_func(coarse_rendered, gt_rgb) + loss_func(fine_rendered, gt_rgb)
             train_timer.toc()
             
-            opt_c.zero_grad()
-            opt_f.zero_grad()
             loss.backward()
-            opt_c.step()
-            opt_f.step()
+            opt.step()
 
             if train_cnt % eval_time == 1:
                 # ========= Evaluation output ========
                 remaining_cnt = (epochs - ep - 1) * train_per_epoch + train_per_epoch - i
                 print("Traning Epoch: %4d / %4d\t Iter %4d / %4d\t train loss: %.4f\tlr:%.7lf\taverage time: %.4lf\tremaining train time:%s"%(
-                        ep, epochs, i, train_per_epoch, loss.item(), sch_f.get_last_lr()[-1], train_timer.get_mean_time(), train_timer.remaining_time(remaining_cnt)
+                        ep, epochs, i, train_per_epoch, loss.item(), sch.get_last_lr()[-1], train_timer.get_mean_time(), train_timer.remaining_time(remaining_cnt)
                 ))
                 writer.add_scalar('Train Loss', loss, train_cnt)
-                writer.add_scalar('Learning Rate', sch_f.get_last_lr()[-1], ep)
-                sch_c.step()
-                sch_f.step()
+                writer.add_scalar('Learning Rate', sch.get_last_lr()[-1], ep)
+                sch.step()
             train_cnt += 1
 
         # model.eval()
         fine_net.eval()
+        coarse_net.eval()
         with torch.no_grad():
             ## +++++++++++ Load from Test set ++++++++=
             eval_timer.tic()
-            image_input = testset[0].cuda()
-            image_sampled = torch.zeros(400, 400, fine_sample_pnum, 6, dtype = torch.float32).cuda()
-            image_lengths = torch.zeros(400, 400, fine_sample_pnum, dtype = torch.float32).cuda()
-            imageSampling(train_cam_tf[0], image_sampled, image_lengths, 400, 400, fine_sample_pnum, test_focal, near_t, far_t)
-            resulting_image = torch.zeros_like(image_input, dtype = torch.float32).cuda()
-            for k in range(8):
-                for j in range(8):
-                    render_timer.tic()
-                    output_rgbo = fine_net.forward(image_sampled[(50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1))].reshape(-1, fine_sample_pnum, 6))
-                    part_image, _ = NeRF.render(
-                        output_rgbo, image_lengths[(50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1))].reshape(-1, fine_sample_pnum),
-                        image_sampled[(50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1)), :, 3:6].reshape(-1, fine_sample_pnum, 3).norm(dim = -1)
-                    )          # originally outputs (2500, 3) -> (reshape) (50, 50, 3) -> (to image) (3, 50, 50)
-                    render_timer.toc()
-                    resulting_image[:, (50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1))] = part_image.view(50, 50, 3).permute(2, 0, 1)
-            test_loss = loss_func(resulting_image, image_input)
+            render_timer.tic()
+            coarse_result = render_image(coarse_net, train_cam_tf[0], 200, test_focal, near_t, far_t, fine_sample_pnum)
+            train_result = render_image(fine_net, train_cam_tf[0], 200, test_focal, near_t, far_t, fine_sample_pnum)
+            test_result_1 = render_image(fine_net, test_cam_tf[0], 200, test_focal, near_t, far_t, fine_sample_pnum)
+            test_result_2 = render_image(fine_net, test_cam_tf[1], 200, test_focal, near_t, far_t, fine_sample_pnum)
+            render_timer.toc()
+            test_loss = loss_func(test_result_1, testset[0].cuda())
+            test_loss += loss_func(test_result_2, testset[1].cuda())
             eval_timer.toc()
             writer.add_scalar('Test Loss', loss, test_cnt)
             print("Evaluation in epoch: %4d / %4d\t, test counter: %d test loss: %.4f\taverage time: %.4lf\tavg render time:%lf\tremaining eval time:%s"%(
-                    ep, epochs, test_cnt, test_loss.item(), eval_timer.get_mean_time(), render_timer.get_mean_time(), eval_timer.remaining_time(epochs - ep - 1)
+                    ep, epochs, test_cnt, test_loss.item() / 2, eval_timer.get_mean_time(), render_timer.get_mean_time(), eval_timer.remaining_time(epochs - ep - 1)
             ))
-            save_image(resulting_image, "./output/result_%03d.png"%(test_cnt))
+            save_image([coarse_result, train_result, test_result_1, test_result_2], "./output/result_%03d.png"%(test_cnt), nrow = 2)
             # ======== Saving checkpoints ========
             torch.save({
-                'model': coarse_net.state_dict(),
-                'optimizer': opt_c.state_dict()},
+                'model': coarse_net.state_dict()},
                 "%schkpt_%d_coarse.pt"%(default_chkpt_path, train_cnt)
             )
             torch.save({
                 'model': fine_net.state_dict(),
-                'optimizer': opt_f.state_dict()},
+                'optimizer': opt.state_dict()},
                 "%schkpt_%d_fine.pt"%(default_chkpt_path, train_cnt)
             )
             test_cnt += 1
@@ -202,13 +203,12 @@ def main():
         )
     # ======== Saving the model ========
     torch.save({
-        'model': coarse_net.state_dict(),
-        'optimizer': opt_c.state_dict()},
+        'model': coarse_net.state_dict()},
         "%schkpt_%d_coarse.pth"%(default_model_path, train_cnt)
     )
     torch.save({
         'model': fine_net.state_dict(),
-        'optimizer': opt_f.state_dict()},
+        'optimizer': opt.state_dict()},
         "%schkpt_%d_fine.pth"%(default_model_path, train_cnt)
     )
     writer.close()
@@ -216,6 +216,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# TODO: 1 当前实现的版本，每一个相机采样的结果并不是标准的camera frustum，其终端是一个球面，而非平面，这是因为采样时将所有光线方向归一化了，但个人觉得影响应该不大

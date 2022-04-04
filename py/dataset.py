@@ -21,7 +21,6 @@ class CustomDataSet(data.Dataset):
         self.root_dir = root_dir
         self.main_dir = root_dir + ("train/" if is_train else "test/")
         self.transform = transform
-        print(self.main_dir)
         img_names = filter(lambda x: x.endswith("png"), os.listdir(self.main_dir))
         all_imgs = [name for name in img_names]
         self.total_imgs = natsort.natsorted(all_imgs)

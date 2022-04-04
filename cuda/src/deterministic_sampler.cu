@@ -49,6 +49,7 @@ __host__ void imageSampler(
     int sample_point_num, float focal, float near_t, float far_t
 ) {
     static int r_state_offset = 0;
+    printf("R state offset: %d\n", r_state_offset);
     const float* const tf_data = tf.data_ptr<float>();
     float* output_data = output.data_ptr<float>();
     float* length_data = lengths.data_ptr<float>();

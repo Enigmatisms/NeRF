@@ -11,7 +11,7 @@ from nerf_helper import sampling, encoding
 from torch.nn import functional as F
 from torchvision.transforms import transforms
 
-def makeMLP(in_chan, out_chan, act = nn.ReLU(inplace = True), batch_norm = False):
+def makeMLP(in_chan, out_chan, act = nn.ReLU(), batch_norm = False):
     modules = [nn.Linear(in_chan, out_chan)]
     if batch_norm == True:
         modules.append(nn.BatchNorm1d(out_chan))
@@ -109,11 +109,10 @@ class NeRF(nn.Module):
     def getNormedWeight(opacity:torch.Tensor, depth:torch.Tensor) -> torch.Tensor:
         delta:torch.Tensor = torch.cat((depth[:, 1:] - depth[:, :-1], torch.FloatTensor([1e10]).repeat((depth.shape[0], 1)).cuda()), dim = -1)
         # print(opacity.shape, depth[:, 1:].shape, raw_delta.shape, delta.shape)
-        mult:torch.Tensor = torch.exp(-opacity * delta)
-        ts:torch.Tensor = torch.hstack((torch.ones(mult.shape[0], 1, dtype = torch.float32).cuda(), torch.cumprod(mult + 1e-10, dim = -1)[:, :-1]))
+        mult:torch.Tensor = torch.exp(-F.relu(opacity) * delta)
         alpha:torch.Tensor = 1. - mult
         # fusion requires normalization, rgb output should be passed through sigmoid
-        weights:torch.Tensor = alpha * ts                # shape (ray_num, point_num)
+        weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).cuda(), 1.-alpha + 1e-10], -1), -1)[:, :-1]
         weight_sum = torch.sum(weights, dim = -1, keepdim = True)
         return weights, weights / weight_sum
 

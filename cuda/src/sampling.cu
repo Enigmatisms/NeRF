@@ -101,8 +101,9 @@ __global__ void easySamplerKernel(
         row_id = id_in_img / width;
         col_id = id_in_img % width;
         const float* const ptr = params + 12 * cam_id;
-        for (int i = 0; i < 12; i++)
+        for (int i = 0; i < 12; i++) {
             transforms[i] = ptr[i];
+        }
         // printf("%d, %d, [%d, %d]\n", id_in_img / width, id_in_img % width, *sample_id, ray_id);
         const int image_offset = row_id * width + col_id, batch_base = 3 * image_size * cam_id;
         for (int i = 0; i < 3; i++)
