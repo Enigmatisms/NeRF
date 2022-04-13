@@ -10,7 +10,6 @@ import shutil
 from datetime import datetime
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
-from nerf_helper import invTransformSample, validSampling
 from time import time
 
 def getSummaryWriter(epochs:int, del_dir:bool):
@@ -51,7 +50,6 @@ def getValidSamples(images:torch.Tensor, invalid_threshold:float = -10) -> torch
     image_result = []
     coord_result = []
     index_result = []
-    # 还需要将图像坐标保存下来
     rows, cols = images.shape[2], images.shape[3]
     row_idxs, col_idxs = torch.meshgrid(torch.arange(rows), torch.arange(cols), indexing = 'ij')
     coords = torch.stack((row_idxs, col_idxs), dim = -1).cuda()        # shape (rows, cols, 2) --> image coordinates 
@@ -70,11 +68,25 @@ def getValidSamples(images:torch.Tensor, invalid_threshold:float = -10) -> torch
     stacked = torch.cat((coords, indices), dim = -1)
     return torch.cat(image_result, dim = 0), stacked.int()
 
+# new valid sampler returns sampled points, sampled length, rgb gt value and camera ray origin and direction
 def validSampler(rgbs:torch.Tensor, coords:torch.Tensor, tfs:torch.Tensor, ray_num:int, point_num:int, w:int, h:int, focal:float, near:float, far:float):
-    output:torch.Tensor = torch.zeros(ray_num, point_num + 1, 9, dtype = torch.float32).cuda()
-    lengths:torch.Tensor = torch.zeros(ray_num, point_num, dtype = torch.float32).cuda()
-    validSampling(rgbs, coords, tfs, output, lengths, w, h, ray_num, point_num, focal, near, far)
-    return output, lengths
+    target_device = rgbs.device
+    max_id = coords.shape[0]
+    indices = torch.randint(0, max_id, (ray_num,)).to(target_device)
+    output_rgb = rgbs[indices]
+    sampled_coords = coords[indices]
+    camera_indices = sampled_coords[:, -1].long()
+    cam_tfs = tfs[camera_indices]
+    resolution = (far - near) / point_num
+    all_lengths = torch.linspace(near, far - resolution, point_num).to(target_device)
+    lengths = all_lengths + torch.rand((ray_num, point_num)).to(target_device) * resolution
+    # sampled coords is (row_id, col_id)
+    ray_raw = ((sampled_coords[..., :-1] * torch.Tensor([-1., 1.]).to(target_device)).roll(shifts = 1, dims = 1) + torch.Tensor([-w / 2, h / 2]).to(target_device)) / focal
+    ray_raw = torch.sum(torch.cat([ray_raw, -torch.ones(ray_raw.shape[0], 1, dtype = torch.float32).to(target_device)], dim = -1).unsqueeze(-2) * cam_tfs[..., :-1], dim = -1)
+    # return shape (ray_num, point_num, 3), (ray_num, point_num), rgb(ray_num, rgb), cams(ray_num, ray_dir, ray_t)
+    pts = cam_tfs[:, :, -1].unsqueeze(-2) + lengths[:, :, None] * ray_raw[:, None, :]
+    # ray_raw is of shape (ray_num, 3)
+    return torch.cat((pts, ray_raw.unsqueeze(-2).repeat(1, point_num, 1)), dim = -1), lengths, output_rgb, torch.cat((cam_tfs[..., -1], ray_raw), dim = -1)
 
 def fov2Focal(fov:float, img_width:float) -> float:
     return .5 * img_width / np.tan(.5 * fov)

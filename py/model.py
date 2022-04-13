@@ -7,7 +7,7 @@
 import torch
 from torch import nn
 from time import time
-from nerf_helper import sampling, encoding
+from nerf_helper import encoding
 from torch.nn import functional as F
 from torchvision.transforms import transforms
 
@@ -66,6 +66,17 @@ class NeRF(nn.Module):
         model_dict.update(state_dict)
         self.load_state_dict(model_dict) 
         print("NeRF Model loaded from '%s'"%(load_path))
+
+    @staticmethod
+    def positional_encoding(x:torch.Tensor, freq_level:int) -> torch.Tensor:
+        result = []
+        ray_num, point_num = x.shape[0], x.shape[1]
+        for fid in range(freq_level):
+            freq = 2. ** fid
+            for func in (torch.sin, torch.cos):
+                result.append(func(freq * x.unsqueeze(-1)))
+        encoded = torch.cat(result, dim = -1).view(ray_num, point_num, -1)
+        return encoded
 
     # for coarse network, input is obtained by sampling, sampling result is (ray_num, point_num, 9), (depth) (ray_num, point_num)
     # TODO: fine-network输入的point_num是192，会产生影响吗？

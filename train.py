@@ -9,8 +9,6 @@ import argparse
 
 from torch import optim
 
-from torch import nn
-from nerf_helper import imageSampling, sampling
 from py.utils import fov2Focal, inverseSample, getSummaryWriter, validSampler, getValidSamples
 from torchvision.utils import save_image
 from py.dataset import CustomDataSet
@@ -23,8 +21,8 @@ default_model_path = "./model/"
 
 parser = argparse.ArgumentParser()
 # general args
-parser.add_argument("--epochs", type = int, default = 500, help = "Training lasts for . epochs")
-parser.add_argument("--train_per_epoch", type = int, default = 600, help = "Train (sample) <x> times in one epoch")
+parser.add_argument("--epochs", type = int, default = 100, help = "Training lasts for . epochs")
+parser.add_argument("--train_per_epoch", type = int, default = 500, help = "Train (sample) <x> times in one epoch")
 parser.add_argument("--sample_ray_num", type = int, default = 1024, help = "<x> rays to sample per training time")
 parser.add_argument("--coarse_sample_pnum", type = int, default = 64, help = "Points to sample in coarse net")
 parser.add_argument("--fine_sample_pnum", type = int, default = 128, help = "Points to sample in fine net")
@@ -43,17 +41,26 @@ parser.add_argument("-s", "--use_scaler", default = False, action = "store_true"
 args = parser.parse_args()
 
 def render_image(network:NeRF, render_pose:torch.Tensor, image_size:int, focal:float, near:float, far:float, sample_num:int=128) -> torch.Tensor:
-    image_sampled = torch.zeros(image_size, image_size, sample_num, 6, dtype = torch.float32).cuda()
-    image_lengths = torch.zeros(image_size, image_size, sample_num, dtype = torch.float32).cuda()
-    imageSampling(render_pose, image_sampled, image_lengths, image_size, image_size, sample_num, focal, near, far)
+    col_idxs, row_idxs = torch.meshgrid(torch.arange(image_size), torch.arange(image_size), indexing = 'xy')
+    coords = torch.stack((col_idxs - image_size / 2, image_size / 2 - row_idxs), dim = -1).cuda() / focal
+    coords = torch.cat((coords, -torch.ones(image_size, image_size, 1, dtype = torch.float32).cuda()), dim = -1)
+    ray_raw = torch.sum(coords.unsqueeze(-2) * render_pose[..., :-1], dim = -1)     # shape (H, W, 3)
+
+    resolution = (far - near) / sample_num
+    all_lengths = torch.linspace(near, far - resolution, sample_num).cuda()
+    sampled_lengths = all_lengths + torch.rand((image_size, image_size, sample_num)).cuda() * resolution
+
+    pts = render_pose[:, -1].unsqueeze(0) + all_lengths[..., None] * ray_raw[:, :, None, :]      # shape ()
+    image_sampled = torch.cat((pts, ray_raw.unsqueeze(-2).repeat(1, 1, sample_num, 1)), dim = -1)
+
     resulting_image = torch.zeros((3, image_size, image_size), dtype = torch.float32).cuda()
     patch_num = image_size // 50
     for k in range(patch_num):
         for j in range(patch_num):
             output_rgbo = network.forward(image_sampled[(50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1))].reshape(-1, sample_num, 6))
             part_image, _ = NeRF.render(
-                output_rgbo, image_lengths[(50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1))].reshape(-1, sample_num),
-                image_sampled[(50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1)), :, 3:6].reshape(-1, sample_num, 3).norm(dim = -1)
+                output_rgbo, sampled_lengths[(50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1))].reshape(-1, sample_num),
+                image_sampled[(50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1)), :, 3:].reshape(-1, sample_num, 3).norm(dim = -1)
             )          # originally outputs (2500, 3) -> (reshape) (50, 50, 3) -> (to image) (3, 50, 50)
             resulting_image[:, (50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1))] = part_image.view(50, 50, 3).permute(2, 0, 1)
     return resulting_image
@@ -81,8 +88,8 @@ def main():
     
     # ======= instantiate model =====
     # NOTE: model is recommended to have loadFromFile method
-    coarse_net = NeRF(10, 4).cuda()
-    fine_net = NeRF(10, 4).cuda()
+    coarse_net = NeRF().cuda()
+    fine_net = NeRF().cuda()
     if use_load == True and os.path.exists(load_path_coarse) and os.path.exists(load_path_fine):
         coarse_net.loadFromFile(load_path_coarse)
         fine_net.loadFromFile(load_path_fine)
@@ -133,23 +140,20 @@ def main():
         fine_net.train()
         for i in range(train_per_epoch):
             train_timer.tic()
-            coarse_samples, coarse_lengths = validSampler(
+            coarse_samples, coarse_lengths, rgb_targets, coarse_cam_rays = validSampler(
                 valid_pixels, valid_coords, train_cam_tf, sample_ray_num, coarse_sample_pnum, 200, 200, train_focal, near_t, far_t
             )
-            coarse_cams = coarse_samples[:, -1, :-3].contiguous()
-            gt_rgb = coarse_samples[:, -1, -3:].contiguous()
-            coarse_samples = coarse_samples[:, :-1, :].contiguous()
             coarse_rgbo = coarse_net.forward(coarse_samples)
-            coarse_rendered, normed_weights = NeRF.render(coarse_rgbo, coarse_lengths, coarse_samples[:, :, 3:6].norm(dim = -1))
+            coarse_rendered, normed_weights = NeRF.render(coarse_rgbo, coarse_lengths, coarse_samples[:, :, 3:].norm(dim = -1))
 
-            _, fine_lengths = inverseSample(normed_weights, coarse_cams, coarse_lengths, fine_sample_pnum, near_t, far_t)
-            fine_samples, fine_lengths = NeRF.coarseFineMerge(coarse_cams, coarse_lengths, fine_lengths)      # (ray_num, 192, 6)
+            _, fine_lengths = inverseSample(normed_weights, coarse_cam_rays, coarse_lengths, fine_sample_pnum, near_t, far_t)
+            fine_samples, fine_lengths = NeRF.coarseFineMerge(coarse_cam_rays, coarse_lengths, fine_lengths)      # (ray_num, 192, 6)
             # 此处存在逻辑问题，需要第二次sort，并且RGB需要整理出来
             fine_rgbo = fine_net.forward(fine_samples)
             fine_rendered, _ = NeRF.render(fine_rgbo, fine_lengths, fine_samples[:, :, 3:6].norm(dim = -1))
 
             opt.zero_grad()
-            loss:torch.Tensor = loss_func(coarse_rendered, gt_rgb) + loss_func(fine_rendered, gt_rgb)
+            loss:torch.Tensor = loss_func(coarse_rendered, rgb_targets) + loss_func(fine_rendered, rgb_targets)
             train_timer.toc()
             
             loss.backward()
@@ -175,17 +179,21 @@ def main():
             render_timer.tic()
             coarse_result = render_image(coarse_net, train_cam_tf[0], 200, test_focal, near_t, far_t, fine_sample_pnum)
             train_result = render_image(fine_net, train_cam_tf[0], 200, test_focal, near_t, far_t, fine_sample_pnum)
-            test_result_1 = render_image(fine_net, test_cam_tf[0], 200, test_focal, near_t, far_t, fine_sample_pnum)
-            test_result_2 = render_image(fine_net, test_cam_tf[1], 200, test_focal, near_t, far_t, fine_sample_pnum)
+            test_results = []
+            test_loss = torch.zeros(1).cuda()
+            for i in range(4):
+                test_result = render_image(fine_net, test_cam_tf[i * 10], 200, test_focal, near_t, far_t, fine_sample_pnum)
+                test_results.append(test_result)
+                test_loss += loss_func(test_result, testset[i * 10].cuda())
             render_timer.toc()
-            test_loss = loss_func(test_result_1, testset[0].cuda())
-            test_loss += loss_func(test_result_2, testset[1].cuda())
             eval_timer.toc()
             writer.add_scalar('Test Loss', loss, test_cnt)
             print("Evaluation in epoch: %4d / %4d\t, test counter: %d test loss: %.4f\taverage time: %.4lf\tavg render time:%lf\tremaining eval time:%s"%(
                     ep, epochs, test_cnt, test_loss.item() / 2, eval_timer.get_mean_time(), render_timer.get_mean_time(), eval_timer.remaining_time(epochs - ep - 1)
             ))
-            save_image([coarse_result, train_result, test_result_1, test_result_2], "./output/result_%03d.png"%(test_cnt), nrow = 2)
+            images_to_save = [coarse_result, train_result]
+            images_to_save.extend(test_results)
+            save_image(images_to_save, "./output/result_%03d.png"%(test_cnt), nrow = 3)
             # ======== Saving checkpoints ========
             torch.save({
                 'model': coarse_net.state_dict()},
