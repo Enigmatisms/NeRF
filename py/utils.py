@@ -10,7 +10,7 @@ import shutil
 from datetime import datetime
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
-from time import time
+from random import randint
 
 def getSummaryWriter(epochs:int, del_dir:bool):
     logdir = './logs/'
@@ -68,25 +68,54 @@ def getValidSamples(images:torch.Tensor, invalid_threshold:float = -10) -> torch
     stacked = torch.cat((coords, indices), dim = -1)
     return torch.cat(image_result, dim = 0), stacked.int()
 
+# input (all training images, center_crop ratio)
+def randomFromOneImage(imgs:torch.Tensor, center_crop:float):
+    img_idx = randint(0, imgs.shape[0] - 1)
+    select_img = imgs[img_idx]
+    half_w = select_img.shape[2] // 2
+    half_h = select_img.shape[1] // 2
+    if center_crop < 9.9e-1:
+        x_lb, x_ub = int(half_w * (1. - center_crop)), int(half_w + half_w * center_crop)
+        y_lb, y_ub = int(half_h * (1. - center_crop)), int(half_h + half_h * center_crop)
+    else:
+        x_lb = y_lb = 0
+        x_ub, y_ub = select_img.shape[2], select_img.shape[1]
+    row_ids, col_ids = torch.meshgrid(torch.arange(x_lb, x_ub), torch.arange(y_lb, y_ub), indexing = 'ij')
+    coords = torch.stack((col_ids - half_w, half_h - row_ids), dim = -1).cuda()
+    # returned values are flattened
+    if center_crop <9.9e-1:
+        return select_img[:, row_ids, col_ids].view(3, -1).transpose(0, 1).contiguous(), coords.view(-1, 2), img_idx
+    else:
+        return select_img.view(3, -1).transpose(0, 1).contiguous(), coords.view(-1, 2), img_idx
+
+def get_rays(H, W, focal, c2w):
+    i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))  # pytorch's meshgrid has indexing='ij'
+    i = i.t()
+    j = j.t()
+    dirs = torch.stack([(i-W / 2)/focal, -(j-H / 2)/focal, -torch.ones_like(i)], -1)
+    # Rotate ray directions from camera frame to the world frame
+    rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    # Translate camera frame's origin to the world frame. It is the origin of all rays.
+    rays_o = c2w[:3,-1].expand(rays_d.shape)
+    return rays_o, rays_d
+
+
 # new valid sampler returns sampled points, sampled length, rgb gt value and camera ray origin and direction
-def validSampler(rgbs:torch.Tensor, coords:torch.Tensor, tfs:torch.Tensor, ray_num:int, point_num:int, w:int, h:int, focal:float, near:float, far:float):
+def validSampler(rgbs:torch.Tensor, coords:torch.Tensor, cam_tf:torch.Tensor, ray_num:int, point_num:int, w:int, h:int, focal:float, near:float, far:float):
     target_device = rgbs.device
     max_id = coords.shape[0]
     indices = torch.randint(0, max_id, (ray_num,)).to(target_device)
     output_rgb = rgbs[indices]
     sampled_coords = coords[indices]
-    camera_indices = sampled_coords[:, -1].long()
-    cam_tfs = tfs[camera_indices]
     resolution = (far - near) / point_num
     all_lengths = torch.linspace(near, far - resolution, point_num).to(target_device)
     lengths = all_lengths + torch.rand((ray_num, point_num)).to(target_device) * resolution
-    # sampled coords is (row_id, col_id)
-    ray_raw = ((sampled_coords[..., :-1] * torch.Tensor([-1., 1.]).to(target_device)).roll(shifts = 1, dims = 1) + torch.Tensor([-w / 2, h / 2]).to(target_device)) / focal
-    ray_raw = torch.sum(torch.cat([ray_raw, -torch.ones(ray_raw.shape[0], 1, dtype = torch.float32).to(target_device)], dim = -1).unsqueeze(-2) * cam_tfs[..., :-1], dim = -1)
+    # sampled coords is (col_id, col_id)
+    ray_raw = torch.sum(torch.cat([sampled_coords / focal, -torch.ones(sampled_coords.shape[0], 1, dtype = torch.float32).to(target_device)], dim = -1).unsqueeze(-2) * cam_tf[:, :-1], dim = -1)
     # return shape (ray_num, point_num, 3), (ray_num, point_num), rgb(ray_num, rgb), cams(ray_num, ray_dir, ray_t)
-    pts = cam_tfs[:, :, -1].unsqueeze(-2) + lengths[:, :, None] * ray_raw[:, None, :]
+    pts = cam_tf[:, -1] + ray_raw[:, None, :] * lengths[:, :, None]
     # ray_raw is of shape (ray_num, 3)
-    return torch.cat((pts, ray_raw.unsqueeze(-2).repeat(1, point_num, 1)), dim = -1), lengths, output_rgb, torch.cat((cam_tfs[..., -1], ray_raw), dim = -1)
+    return torch.cat((pts, ray_raw.unsqueeze(-2).repeat(1, point_num, 1)), dim = -1), lengths, output_rgb, torch.cat((cam_tf[:, -1].unsqueeze(0).repeat(ray_raw.shape[0], 1), ray_raw), dim = -1)
 
 def fov2Focal(fov:float, img_width:float) -> float:
     return .5 * img_width / np.tan(.5 * fov)

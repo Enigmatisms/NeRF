@@ -11,6 +11,19 @@ from nerf_helper import encoding
 from torch.nn import functional as F
 from torchvision.transforms import transforms
 
+# from pytorch.org https://discuss.pytorch.org/t/finding-source-of-nan-in-forward-pass/51153/2
+def nan_hook(self, inp, output):
+    if not isinstance(output, tuple):
+        outputs = [output]
+    else:
+        outputs = output
+
+    for i, out in enumerate(outputs):
+        nan_mask = torch.isnan(out)
+        if nan_mask.any():
+            print("In", self.__class__.__name__)
+            raise RuntimeError(f"Found NAN in output {i} at indices: ", nan_mask.nonzero(), "where:", out[nan_mask.nonzero()[:, 0].unique(sorted=True)])
+
 def makeMLP(in_chan, out_chan, act = nn.ReLU(), batch_norm = False):
     modules = [nn.Linear(in_chan, out_chan)]
     if batch_norm == True:
@@ -57,7 +70,6 @@ class NeRF(nn.Module):
         )
         self.apply(self.init_weight)
 
-
     def loadFromFile(self, load_path:str):
         save = torch.load(load_path)   
         save_model = save['model']                  
@@ -91,7 +103,6 @@ class NeRF(nn.Module):
         encoding(rotation, encoded_r, self.direction_flevel, False)
         encoded_x = encoded_x.view(pts.shape[0], pts.shape[1], position_dim)
         encoded_r = encoded_r.view(pts.shape[0], pts.shape[1], direction_dim)
-
         tmp = self.lin_block1(encoded_x)
         encoded_x = torch.cat((encoded_x, tmp), dim = -1)
         encoded_x = self.lin_block2(encoded_x)
@@ -107,10 +118,9 @@ class NeRF(nn.Module):
         zvals, _ = torch.sort(zvals, dim = -1)
         sample_pnum = f_zvals.shape[1] + c_zvals.shape[1]
         # Use sort depth to calculate sampled points
-        raw_pts = rays.repeat(repeats = (1, 1, sample_pnum)).view(rays.shape[0], sample_pnum, -1)
+        pts = rays[...,None,:3] + rays[...,None,3:] * zvals[...,:,None] 
         # depth * ray_direction + origin (this should be further tested)
-        raw_pts[:, :, :3] += zvals[:, :, None] * raw_pts[:, :, 3:]
-        return raw_pts, zvals          # output is (ray_num, coarse_pts num + fine pts num, 6)
+        return torch.cat((pts, rays[:, 3:].unsqueeze(-2).repeat(1, sample_pnum, 1)), dim = -1), zvals          # output is (ray_num, coarse_pts num + fine pts num, 6)
 
     """
         This function is important for inverse transform sampling, since for every ray
@@ -123,7 +133,7 @@ class NeRF(nn.Module):
         mult:torch.Tensor = torch.exp(-F.relu(opacity) * delta)
         alpha:torch.Tensor = 1. - mult
         # fusion requires normalization, rgb output should be passed through sigmoid
-        weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).cuda(), 1.-alpha + 1e-10], -1), -1)[:, :-1]
+        weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).cuda(), 1.-alpha + 1e-10], -1), -1)[:, :-1] + 1e-9
         weight_sum = torch.sum(weights, dim = -1, keepdim = True)
         return weights, weights / weight_sum
 
@@ -135,7 +145,6 @@ class NeRF(nn.Module):
         rgb:torch.Tensor = rgbo[..., :3] # shape (ray_num, pnum, 3)
         opacity:torch.Tensor = rgbo[..., -1]             # 1e-5 is used for eliminating numerical instability
         weights, weights_normed = NeRF.getNormedWeight(opacity, depth)
-
         weighted_rgb:torch.Tensor = weights[:, :, None] * rgb
         return torch.sum(weighted_rgb, dim = -2), weights_normed     # output (ray_num, 3) and (ray_num, point_num)
 
