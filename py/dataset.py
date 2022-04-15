@@ -25,6 +25,7 @@ class CustomDataSet(data.Dataset):
         all_imgs = [name for name in img_names]
         self.total_imgs = natsort.natsorted(all_imgs)
         self.use_alpha = use_alpha
+        self.cam_fov, self.tfs = self.__get_camera_param()
 
     def __len__(self):
         return len(self.total_imgs)
@@ -32,9 +33,8 @@ class CustomDataSet(data.Dataset):
     def __getitem__(self, idx):
         img_loc = os.path.join(self.main_dir, self.total_imgs[idx])
         image = Image.open(img_loc, mode = 'r').convert("RGBA" if self.use_alpha else "RGB")
-        print(image.mode, image.size)
         tensor_image = self.transform(image)
-        return tensor_image
+        return tensor_image, self.tfs[idx]
 
     @staticmethod
     def readFromJson(path:str):
@@ -46,9 +46,12 @@ class CustomDataSet(data.Dataset):
         tfs = torch.from_numpy(tf_np)[:, :3, :]
         return cam_fov, tfs.float()
         
-    def getCameraParam(self):
+    def __get_camera_param(self):
         json_file = "%stransforms_%s.json"%(self.root_dir, "train" if self.is_train else "test")
         return CustomDataSet.readFromJson(json_file)
+
+    def getCameraParam(self):
+        return self.cam_fov, self.tfs
 
     """
         Return camera fov, transforms for each image, batchified image data in shape (N, 3, H, W)
