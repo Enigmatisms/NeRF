@@ -26,3 +26,4 @@ class Timer:
     def remaining_time(self, exec_needed:int):
         time = self.get_mean_time() * exec_needed
         return str(timedelta(seconds = time))
+        
