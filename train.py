@@ -151,8 +151,7 @@ def main():
     train_timer, eval_timer, epoch_timer, render_timer = Timer(5), Timer(5), Timer(3), Timer(4)
     for ep in range(epochs):
         epoch_timer.tic()
-        coarse_net.train()
-        fine_net.train()
+        
         for i, (train_img, train_tf) in enumerate(train_loader):
             train_timer.tic()
             train_img = train_img.cuda().squeeze(0)
@@ -192,9 +191,9 @@ def main():
             train_cnt += 1
 
         # model.eval()
-        fine_net.eval()
-        coarse_net.eval()
-        if ep % 4 or ep == epochs - 1:
+        if (ep % 20 == 0) or ep == epochs - 1:
+            fine_net.eval()
+            coarse_net.eval()
             with torch.no_grad():
                 ## +++++++++++ Load from Test set ++++++++=
                 eval_timer.tic()
@@ -220,6 +219,8 @@ def main():
                 saveModel(coarse_net,  "%schkpt_%d_coarse.pt"%(default_chkpt_path, train_cnt), opt = None, amp = (amp) if use_amp else None)
                 saveModel(fine_net,  "%schkpt_%d_fine.pt"%(default_chkpt_path, train_cnt), opt = opt, amp = (amp) if use_amp else None)
                 test_cnt += 1
+            coarse_net.train()
+            fine_net.train()
         epoch_timer.toc()
         print("Epoch %4d / %4d completed\trunning time for this epoch: %.5lf\testimated remaining time: %s"
                 %(ep, epochs, epoch_timer.get_mean_time(), epoch_timer.remaining_time(epochs - ep - 1))
