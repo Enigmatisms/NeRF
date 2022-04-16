@@ -8,7 +8,7 @@ Re-implementation of ECCV 2020 NeRF with PyTorch:
 
 Quick overview for a 10-hour training results (single view rendering, APEX O2 optimized) in nerf-blender-synthetic dataset (drums):
 
-<img src="/home/stn/dl/NeRF/assets/dynamic.gif" style="zoom:50%;" />
+<img src="./assets/dynamic.gif" style="zoom:50%;" />
 
 This repo contains:
 
@@ -96,14 +96,14 @@ Apart from the dynamic results (full resolution) listed above, there are some ad
 
 Iterated for 20 epochs (100 images selected, which takes 260s to train, 13s per epoch on RTX 3060)
 
-![](/home/stn/dl/NeRF/assets/lego_1.png)
+![](./assets/lego_1.png)
 
 Iterated for ?? epochs (I don't remember). The top-left-most image is rendered by coarse network, therefore it is more blurred.
 
-![](/home/stn/dl/NeRF/assets/lego_2.png)
+![](./assets/lego_2.png)
 
 Iterated for 100s epochs (3+ hours - training, apex O2, half resolution, (rendering is slow, 42s for eight images)). The top-left-most image is rendered by coarse network, therefore it is more blurred.
 
-![](/home/stn/dl/NeRF/assets/lego_3.png)
+![](./assets/lego_3.png)
 
 I am not so patient, therefore all of the models aren't trained thoroughly (also I think it is meaningless to do that). 
