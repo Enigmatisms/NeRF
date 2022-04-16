@@ -33,7 +33,7 @@ parser.add_argument("--near", type = float, default = 2., help = "Nearest sample
 parser.add_argument("--far", type = float, default = 6., help = "Farthest sample depth")
 parser.add_argument("--center_crop", type = float, default = 0.5, help = "Farthest sample depth")
 parser.add_argument("--name", type = str, default = "model_1", help = "Model name for loading")
-parser.add_argument("--dataset_name", type = str, default = "lego", help = "Input dataset name in nerf synthetic dataset")
+parser.add_argument("--dataset_name", type = str, default = "ship", help = "Input dataset name in nerf synthetic dataset")
 # opt related
 parser.add_argument("--min_ratio", type = float, default = 0.1, help = "lr exponential decay, final / intial min ratio")
 parser.add_argument("--alpha", type = float, default = 0.99995, help = "lr exponential decay rate")
@@ -41,6 +41,7 @@ parser.add_argument("--alpha", type = float, default = 0.99995, help = "lr expon
 parser.add_argument("-d", "--del_dir", default = False, action = "store_true", help = "Delete dir ./logs and start new tensorboard records")
 parser.add_argument("-l", "--load", default = False, action = "store_true", help = "Load checkpoint or trained model.")
 parser.add_argument("-s", "--use_scaler", default = False, action = "store_true", help = "Use AMP scaler to speed up")
+parser.add_argument("-b", "--debug", default = False, action = "store_true", help = "Code debugging (detect gradient anomaly and NaNs)")
 args = parser.parse_args()
 
 def render_image(network:NeRF, render_pose:torch.Tensor, image_size:int, focal:float, near:float, far:float, sample_num:int=128) -> torch.Tensor:
@@ -85,7 +86,8 @@ def main():
     # Bool options
     del_dir             = args.del_dir
     use_load            = args.load
-    use_amp             = args.use_scaler
+    debugging           = args.debug
+    use_amp             = (args.use_scaler and (not debugging))
     if use_amp:
         from apex import amp
         opt_level = 'O2'
@@ -99,11 +101,13 @@ def main():
     coarse_net = NeRF(10, 4).cuda()
     fine_net = NeRF(10, 4).cuda()
 
-    # for submodule in coarse_net.modules():
-    #     submodule.register_forward_hook(nan_hook)
+    if debugging:
+        for submodule in coarse_net.modules():
+            submodule.register_forward_hook(nan_hook)
 
-    # for submodule in fine_net.modules():
-    #     submodule.register_forward_hook(nan_hook)
+        for submodule in fine_net.modules():
+            submodule.register_forward_hook(nan_hook)
+        torch.autograd.set_detect_anomaly(True)
 
     # ======= Loss function ==========
     loss_func = lambda x, y : torch.mean((x - y) ** 2)
@@ -140,8 +144,8 @@ def main():
     train_focal = fov2Focal(cam_fov_train, 400)
     test_focal = fov2Focal(cam_fov_test, 400)
     test_views = []
-    for i in range(6):
-        test_views.append(testset[i * 10])
+    for i in range(3, 6):
+        test_views.append(testset[i * 11])
     torch.cuda.empty_cache()
 
     # ====== tensorboard summary writer ======
@@ -198,8 +202,6 @@ def main():
                 ## +++++++++++ Load from Test set ++++++++=
                 eval_timer.tic()
                 render_timer.tic()
-                coarse_result = render_image(coarse_net, train_cam_tf, 400, test_focal, near_t, far_t, fine_sample_pnum)
-                train_result = render_image(fine_net, train_cam_tf, 400, test_focal, near_t, far_t, fine_sample_pnum)
                 test_results = []
                 test_loss = torch.zeros(1).cuda()
                 for test_img, test_tf in test_views:
@@ -212,9 +214,9 @@ def main():
                 print("Evaluation in epoch: %4d / %4d\t, test counter: %d test loss: %.4f\taverage time: %.4lf\tavg render time:%lf\tremaining eval time:%s"%(
                         ep, epochs, test_cnt, test_loss.item() / 2, eval_timer.get_mean_time(), render_timer.get_mean_time(), eval_timer.remaining_time(epochs - ep - 1)
                 ))
-                images_to_save = [coarse_result, train_result]
+                images_to_save = []
                 images_to_save.extend(test_results)
-                save_image(images_to_save, "./output/result_%03d.png"%(test_cnt), nrow = 4)
+                save_image(images_to_save, "./output/result_%03d.png"%(test_cnt), nrow = 3)
                 # ======== Saving checkpoints ========
                 saveModel(coarse_net,  "%schkpt_%d_coarse.pt"%(default_chkpt_path, train_cnt), opt = None, amp = (amp) if use_amp else None)
                 saveModel(fine_net,  "%schkpt_%d_fine.pt"%(default_chkpt_path, train_cnt), opt = opt, amp = (amp) if use_amp else None)

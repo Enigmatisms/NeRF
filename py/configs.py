@@ -1,6 +1,3 @@
-from distutils.command.config import config
-
-
 fully_fused = {
 	"otype": "FullyFusedMLP",    
 	"activation": "ReLU",        
