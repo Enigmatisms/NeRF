@@ -6,34 +6,10 @@
 
 import torch
 from torch import nn
-from time import time
-from nerf_helper import encoding
 from torch.nn import functional as F
-from torchvision.transforms import transforms
 from apex import amp
+from py.utils import makeMLP
 # import tinycudann as tcnn
-from py.configs import get_CUTLASS, get_FULLY_FUSED
-
-# from pytorch.org https://discuss.pytorch.org/t/finding-source-of-nan-in-forward-pass/51153/2
-def nan_hook(self, inp, output):
-    if not isinstance(output, tuple):
-        outputs = [output]
-    else:
-        outputs = output
-
-    for i, out in enumerate(outputs):
-        nan_mask = torch.isnan(out)
-        if nan_mask.any():
-            print("In", self.__class__.__name__)
-            raise RuntimeError(f"Found NAN in output {i} at indices: ", nan_mask.nonzero(), "where:", out[nan_mask.nonzero()[:, 0].unique(sorted=True)])
-
-def makeMLP(in_chan, out_chan, act = nn.ReLU(), batch_norm = False):
-    modules = [nn.Linear(in_chan, out_chan)]
-    if batch_norm == True:
-        modules.append(nn.BatchNorm1d(out_chan))
-    if not act is None:
-        modules.append(act)
-    return modules
 
 # This module is shared by coarse and fine network, with no need to modify
 class NeRF(nn.Module):
@@ -47,20 +23,21 @@ class NeRF(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def __init__(self, position_flevel, direction_flevel) -> None:
+    def __init__(self, position_flevel, direction_flevel, cat_origin = True) -> None:
         super().__init__()
         self.position_flevel = position_flevel
         self.direction_flevel = direction_flevel
-
-        module_list = makeMLP(63, 256)
-        for _ in range(4):
+        extra_width = 3 if cat_origin else 0
+        module_list = makeMLP(60 + extra_width, 256)
+        for _ in range(3):
             module_list.extend(makeMLP(256, 256))
 
         self.lin_block1 = nn.Sequential(*module_list)       # MLP before skip connection
         self.lin_block2 = nn.Sequential(
-            *makeMLP(319, 256),
-            *makeMLP(256, 256), *makeMLP(256, 256),
+            *makeMLP(316 + extra_width, 256),
+            *makeMLP(256, 256), *makeMLP(256, 256)
         )
+
 
         self.bottle_neck = nn.Sequential(*makeMLP(256, 256, None))
 
@@ -68,9 +45,10 @@ class NeRF(nn.Module):
             *makeMLP(256, 1)
         )
         self.rgb_layer = nn.Sequential(
-            *makeMLP(283, 128),
+            *makeMLP(280 + extra_width, 128),
             *makeMLP(128, 3, nn.Sigmoid())
         )
+        self.cat_origin = cat_origin
         self.apply(self.init_weight)
 
     def loadFromFile(self, load_path:str, use_amp = False, opt = None):
@@ -99,20 +77,21 @@ class NeRF(nn.Module):
 
     # for coarse network, input is obtained by sampling, sampling result is (ray_num, point_num, 9), (depth) (ray_num, point_num)
     # TODO: fine-network输入的point_num是192，会产生影响吗？
-    def forward(self, pts:torch.Tensor) -> torch.Tensor:
-        flat_batch = pts.shape[0] * pts.shape[1]
+    def forward(self, pts:torch.Tensor, encoded_pt:torch.Tensor = None) -> torch.Tensor:
         position_dim, direction_dim = 6 * self.position_flevel, 6 * self.direction_flevel
-        encoded_x:torch.Tensor = torch.zeros(flat_batch, position_dim).cuda()
-        encoded_r:torch.Tensor = torch.zeros(flat_batch, direction_dim).cuda()
-        encoded_x = NeRF.positional_encoding(pts[:, :, :3], self.position_flevel)
+        if not encoded_pt is None:
+            encoded_x = encoded_pt
+        else:
+            encoded_x = NeRF.positional_encoding(pts[:, :, :3], self.position_flevel)
         rotation = pts[:, :, 3:6].reshape(-1, 3)
         rotation = rotation / rotation.norm(dim = -1, keepdim = True)
         encoded_r = NeRF.positional_encoding(rotation, self.direction_flevel)
         encoded_x = encoded_x.view(pts.shape[0], pts.shape[1], position_dim)
         encoded_r = encoded_r.view(pts.shape[0], pts.shape[1], direction_dim)
 
-        encoded_x = torch.cat((pts[:, :, :3], encoded_x), -1)
-        encoded_r = torch.cat((rotation.view(pts.shape[0], pts.shape[1], -1), encoded_r), -1)
+        if self.cat_origin:
+            encoded_x = torch.cat((pts[:, :, :3], encoded_x), -1)
+            encoded_r = torch.cat((rotation.view(pts.shape[0], pts.shape[1], -1), encoded_r), -1)
 
         tmp = self.lin_block1(encoded_x)
         encoded_x = torch.cat((encoded_x, tmp), dim = -1)

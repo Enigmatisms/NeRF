@@ -32,8 +32,8 @@ def coneParameters(zvals:torch.Tensor, r:float):
 # calculate the covariance matrix and mean vector of Gaussian approx for a cone
 # 需要张量计算, cam_rays的shape是 (ray_num, 6), mu_t的shape是(ray_num, num_cones) 所以需要None来增加维度
 def coneMeanCov(cam_rays:torch.Tensor, mu_t:torch.Tensor, sigma_t2:torch.Tensor, sigma_r2:torch.Tensor) -> torch.Tensor:
-    target_device = mu_t.device()
-    mu:torch.Tensor = cam_rays[:, :3] + mu_t[:, :, None] * cam_rays[:, None, 3:]
+    target_device = mu_t.device
+    mu:torch.Tensor = cam_rays[:, None, :3] + mu_t[:, :, None] * cam_rays[:, None, 3:]
     dd:torch.Tensor = cam_rays[:, 3:] * cam_rays[:, 3:]        # (ray_num, 3)
     i_m_ddt:torch.Tensor = torch.ones(3, device = target_device)[None, ...] - dd / cam_rays[:, 3:].norm()       # (ray_num, 3, 3)
     diag_sigma:torch.Tensor = sigma_t2[:, :, None] * dd[:, None, ...] + sigma_r2[:, :, None] * i_m_ddt[:, None, ...]        # (ray_num, num_cones, 3, 3)
@@ -41,10 +41,10 @@ def coneMeanCov(cam_rays:torch.Tensor, mu_t:torch.Tensor, sigma_t2:torch.Tensor,
 
 # 上面这个函数最后用于计算positional encoding的计算量太大，我们只需要计算对角线
 def multFreq(freq_lvs:int, mu:torch.Tensor, diag_sigma:torch.Tensor):
-    target_device = mu.device()
+    target_device = mu.device
     # mu shape(ray_num, cone_num, 3), diag_sigma shape: (ray_num, cone_num, 3)
     P:torch.Tensor = torch.cat([torch.eye(3, device = target_device) * (2 ** i) for i in range(freq_lvs)], dim = 0)
-    diag_P:torch.Tensor = torch.FloatTensor([4 ** i for i in range(freq_lvs)], device = target_device)
+    diag_P:torch.Tensor = torch.FloatTensor([4 ** i for i in range(freq_lvs)]).to(target_device)
     # diag_sigma_r 的shape应该是 (ray_num, cone_num, 3L)
     ray_num, cone_num, _ = diag_sigma.shape
     diag_sigma_r:torch.Tensor = (diag_P[None, None, :, None] * diag_sigma[..., None, :]).view(ray_num, cone_num, -1)
@@ -61,4 +61,13 @@ def ipe_feature(zvals:torch.Tensor, cam_rays:torch.Tensor, freq_lvs:int, r:float
     cos_part = torch.cos(mu_r) * diag_sigma_r
     sin_part = sin_part.view(ray_num, cone_num, -1, 3)
     cos_part = cos_part.view(ray_num, cone_num, -1, 3)
-    return torch.cat((sin_part, cos_part), dim = -1).view(ray_num, cone_num, -1)
+    # output shape (ray_num, cone_num, 6L)
+    return torch.cat((sin_part, cos_part), dim = -1).view(ray_num, cone_num, -1), mu, mu_t
+
+# 对权重进行2-tap max filter以及 2-tap blur filter
+def maxBlurFilter(weights:torch.Tensor, alpha:float):
+    # maxi shape (ray_num, cone_num - 1)
+    maxi, _ = torch.max(torch.cat((weights[..., :-1, None], weights[..., 1:, None]), dim = -1), dim = -1)
+    front_max = torch.cat((weights[..., 0:1], maxi), dim = -1)
+    rare_max = torch.cat((maxi, weights[..., -1:]), dim = -1)
+    return 0.5 * (front_max + rare_max) + alpha
