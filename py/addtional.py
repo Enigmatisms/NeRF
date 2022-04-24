@@ -25,7 +25,7 @@ class ProposalLoss(nn.Module):
     def __init__(self): super().__init__()
     def forward(self, prop_bounds:torch.Tensor, nerf_weights:torch.Tensor) -> torch.Tensor:
         bound_diff = (F.relu(nerf_weights - prop_bounds)) ** 2
-        return torch.sum(bound_diff / (nerf_weights + 1e-6))
+        return torch.sum(bound_diff / (nerf_weights + 1e-8))
 
 class ProposalNetwork(nn.Module):
     @staticmethod
@@ -42,7 +42,7 @@ class ProposalNetwork(nn.Module):
         extra_dims = 3 if cat_origin else 0
         self.layers = nn.Sequential(
             *makeMLP(self.position_dims + extra_dims, 256),
-            *makeMLP(256, 256), *makeMLP(256, 256),
+            *makeMLP(256, 256), *makeMLP(256, 256), *makeMLP(256, 256),
             *makeMLP(256, 1, nn.Softplus())
         )
         self.apply(self.init_weight)

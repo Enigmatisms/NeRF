@@ -169,7 +169,6 @@ def main():
             coarse_rendered, weights = NeRF.render(coarse_rgbo, coarse_lengths, coarse_cam_rays[:, 3:])
             fine_lengths = inverseSample(weights, coarse_lengths, fine_sample_pnum)
             fine_samples, fine_lengths = NeRF.coarseFineMerge(coarse_cam_rays, coarse_lengths, fine_lengths)      # (ray_num, 192, 6)
-            # 此处存在逻辑问题，需要第二次sort，并且RGB需要整理出来
             fine_rgbo = fine_net.forward(fine_samples)
             fine_rendered, _ = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])
 

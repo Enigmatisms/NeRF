@@ -5,6 +5,7 @@
 import os
 import torch
 import argparse
+import matplotlib.pyplot as plt
 from torchvision import transforms
 
 from torch import optim
@@ -27,6 +28,7 @@ parser = argparse.ArgumentParser()
 
 # general args
 parser.add_argument("--epochs", type = int, default = 2000, help = "Training lasts for . epochs")
+parser.add_argument("--ep_start", type = int, default = 0, help = "Start epoches from <ep_start>")
 parser.add_argument("--sample_ray_num", type = int, default = 1024, help = "<x> rays to sample per training time")
 parser.add_argument("--coarse_sample_pnum", type = int, default = 64, help = "Points to sample in coarse net")
 parser.add_argument("--fine_sample_pnum", type = int, default = 128, help = "Points to sample in fine net")
@@ -45,6 +47,7 @@ parser.add_argument("-d", "--del_dir", default = False, action = "store_true", h
 parser.add_argument("-l", "--load", default = False, action = "store_true", help = "Load checkpoint or trained model.")
 parser.add_argument("-s", "--use_scaler", default = False, action = "store_true", help = "Use AMP scaler to speed up")
 parser.add_argument("-b", "--debug", default = False, action = "store_true", help = "Code debugging (detect gradient anomaly and NaNs)")
+parser.add_argument("-v", "--visualize", default = False, action = "store_true", help = "Visualize proposal network")
 args = parser.parse_args()
 
 def render_image(network:NeRF, render_pose:torch.Tensor, image_size:int, focal:float, near:float, far:float, sample_num:int=128, pixel_width:float=0.0) -> torch.Tensor:
@@ -93,6 +96,8 @@ def main():
     use_load            = args.load
     debugging           = args.debug
     use_amp             = (args.use_scaler and (not debugging))
+    viz_prop            = args.visualize
+    ep_start            = args.ep_start
     if use_amp:
         from apex import amp
         opt_level = 'O2'
@@ -154,9 +159,9 @@ def main():
     # ====== tensorboard summary writer ======
     writer = getSummaryWriter(epochs, del_dir)
 
-    train_cnt, test_cnt = 0, 0
+    train_cnt, test_cnt = ep_start * 100, ep_start // 20
     train_timer, eval_timer, epoch_timer, render_timer = Timer(5), Timer(5), Timer(3), Timer(4)
-    for ep in range(epochs):
+    for ep in range(ep_start, epochs):
         epoch_timer.tic()
         
         for i, (train_img, train_tf) in enumerate(train_loader):
@@ -172,15 +177,15 @@ def main():
             )
             ipe_pts, mu_pts, mu_ts = ipe_feature(coarse_lengths, coarse_cam_rays, 10, pixel_width)
             density = prop_net.forward(mu_pts, ipe_pts)
-            prop_weights = ProposalNetwork.get_weights(density, mu_ts, coarse_cam_rays[:, 3:])      # (ray_num, num of proposal interval)
+            prop_weights_raw = ProposalNetwork.get_weights(density, mu_ts, coarse_cam_rays[:, 3:])      # (ray_num, num of proposal interval)
 
-            prop_weights = maxBlurFilter(prop_weights, 0.01)
+            prop_weights = maxBlurFilter(prop_weights_raw, 0.01)
             fine_lengths, sort_inds, below_idxs = inverseSample(prop_weights, mu_ts, fine_sample_pnum + 1, sort = True)
             ipe_pts, mu_pts, mu_ts = ipe_feature(fine_lengths, coarse_cam_rays, 10, pixel_width)
             samples = torch.cat((mu_pts, coarse_cam_rays.unsqueeze(-2).repeat(1, fine_sample_pnum, 1)), dim = -1)
             fine_rgbo = mip_net.forward(samples)
             fine_rendered, weights = NeRF.render(fine_rgbo, mu_ts, coarse_cam_rays[:, 3:])
-
+            # (mu_ts and weights) (coarse_length & prop_weights should be visualized)
             weight_bounds:torch.Tensor = getBounds(prop_weights, below_idxs, sort_inds)     # output shape: (ray_num, num of conical frustum)
             prop_loss:torch.Tensor = prop_loss_func(weight_bounds, weights.detach())             # stop the gradient of NeRF MLP 
             loss:torch.Tensor = prop_loss + loss_func(fine_rendered, rgb_targets)
@@ -211,6 +216,16 @@ def main():
             with torch.no_grad():
                 ## +++++++++++ Load from Test set ++++++++=
                 eval_timer.tic()
+                if viz_prop == True:
+                    for k in range(4):
+                        coarse_delta = coarse_lengths[k * 20, 1:] - coarse_lengths[k * 20, :-1]
+                        plt.subplot(2, 2, 1 + k)
+                        plt.bar((coarse_lengths[k * 20, :-1] + coarse_delta / 2).cpu(), prop_weights[k * 20].cpu(), width = coarse_delta.cpu(), alpha = 0.7, color = 'b', label = 'Proposal weights')
+                        plt.bar(mu_ts[k * 20].cpu(), weights[k * 20].detach().cpu(), width = 0.01, color = 'r', label = 'NeRF weights')
+                        plt.legend()
+                    plt.savefig("./output/proposal_dist_%03d.png"%(test_cnt))
+                    plt.clf()
+                    plt.cla()
                 render_timer.tic()
                 test_results = []
                 test_loss = torch.zeros(1).cuda()
@@ -229,6 +244,7 @@ def main():
                 save_image(images_to_save, "./output/result_%03d.png"%(test_cnt), nrow = 3)
                 # ======== Saving checkpoints ========
                 saveModel(mip_net,  "%schkpt_%d_mip.pt"%(default_chkpt_path, train_cnt), opt = None, amp = (amp) if use_amp else None)
+                saveModel(prop_net,  "%schkpt_%d_prop.pt"%(default_chkpt_path, train_cnt), opt = None, amp = (amp) if use_amp else None)
                 test_cnt += 1
             mip_net.train()
         epoch_timer.toc()
