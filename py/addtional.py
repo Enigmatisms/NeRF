@@ -5,18 +5,29 @@
 """
 
 import torch
+from apex import amp
 from torch import nn
 from torch.nn import functional as F
-from apex import amp
-from py.utils import makeMLP
+from py.nerf_helper import makeMLP
 
 
 # according to calculated weights (of proposal net) and indices of inverse sampling, calculate the bounds required for loss computation
 # input weights (from proposal net) shape: (ray_num, num of proposal interval), inds shape (ray_num, fine_sample num + 1? TODO, 2)
-def getBounds(weights:torch.Tensor, inds:torch.Tensor):
-    pass
+# 输入的inds应该是sample_pdf中的 below，每个点将有两个值。考虑到sample_pdf得到的点数量为(cone_num + 1)
+def getBounds(weights:torch.Tensor, inds:torch.Tensor, sort_inds:torch.Tensor):
+    ray_num, target_device = weights.shape[0], weights.device
+    inds = torch.gather(inds, -1, sort_inds)
+    starts, ends = inds[:, :-1], inds[:, 1:] + 1
+    sat:torch.Tensor = torch.cat((torch.zeros(ray_num, 1, device = target_device), torch.cumsum(weights, dim = -1)), dim = -1)                  # 输入的 weights是什么？proposal net 的weights
+    return torch.gather(sat, -1, ends) - torch.gather(sat, -1, starts)
 
-class NeRF(nn.Module):
+class ProposalLoss(nn.Module):
+    def __init__(self): super().__init__()
+    def forward(self, prop_bounds:torch.Tensor, nerf_weights:torch.Tensor) -> torch.Tensor:
+        bound_diff = (F.relu(nerf_weights - prop_bounds)) ** 2
+        return torch.sum(bound_diff / (nerf_weights + 1e-6))
+
+class ProposalNetwork(nn.Module):
     @staticmethod
     def init_weight(m):
         if isinstance(m, nn.Linear):
@@ -24,9 +35,16 @@ class NeRF(nn.Module):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
-    def __init__(self, position_flevel, direction_flevel, cat_origin = True) -> None:
+    def __init__(self, position_flevel, cat_origin = True) -> None:
         super().__init__()
-        
+        self.position_dims = position_flevel * 6
+        self.cat_origin = cat_origin
+        extra_dims = 3 if cat_origin else 0
+        self.layers = nn.Sequential(
+            *makeMLP(self.position_dims + extra_dims, 256),
+            *makeMLP(256, 256), *makeMLP(256, 256),
+            *makeMLP(256, 1, nn.Softplus())
+        )
         self.apply(self.init_weight)
 
     def loadFromFile(self, load_path:str, use_amp = False, opt = None):
@@ -42,10 +60,21 @@ class NeRF(nn.Module):
             amp.load_state_dict(save['amp'])
         print("NeRF Model loaded from '%s'"%(load_path))
 
-    # 主要问题是，如何将公式(13)复现出来
-    def forward(self, pts:torch.Tensor, encoded_pt:torch.Tensor = None) -> torch.Tensor:
-        pass
-        # return torch.cat((rgb, opacity), dim = -1)      # output (ray_num, point_num, 4)
+    def forward(self, pts:torch.Tensor, encoded_pt:torch.Tensor) -> torch.Tensor:
+        encoded_x = encoded_pt.view(pts.shape[0], pts.shape[1], self.position_dims)
+        if self.cat_origin:
+            encoded_x = torch.cat((pts, encoded_x), -1)
+        # output shape (ray_num, coarse_sample_num, 1) --> (ray_num, coarse_sample_num)
+        return self.layers(encoded_x).squeeze(-1)
+
+    @staticmethod
+    def get_weights(density:torch.Tensor, zvals:torch.Tensor, ray_dirs:torch.Tensor) -> torch.Tensor:
+        zvals = zvals * (ray_dirs.norm(dim = -1, keepdim = True))
+        delta:torch.Tensor = torch.cat((zvals[:, 1:] - zvals[:, :-1], torch.FloatTensor([1e10]).repeat((zvals.shape[0], 1)).cuda()), dim = -1)
+        mult:torch.Tensor = torch.exp(-F.relu(density) * delta)
+        alpha:torch.Tensor = 1. - mult
+        weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).cuda(), mult + 1e-10], -1), -1)[:, :-1]
+        return weights     # output (ray_num, num of coarse sample (proposal interval number))
 
 if __name__ == "__main__":
     print("Hello NeRF world!")

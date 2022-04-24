@@ -3,20 +3,22 @@
     NeRF training executable
 """
 import os
-from torchvision import transforms
 import torch
 import argparse
+from torchvision import transforms
 
-from torch import device, optim
+from torch import optim
 from torch.utils.data import DataLoader
 
-from py.utils import fov2Focal, inverseSample, getSummaryWriter, validSampler, randomFromOneImage, saveModel, getRadius
-from torchvision.utils import save_image
-from py.dataset import CustomDataSet
-from py.model import NeRF, nan_hook
-from py.timer import Timer
-from py.mip_methods import ipe_feature, maxBlurFilter
 from functools import partial
+from py.dataset import CustomDataSet
+from torchvision.utils import save_image
+from py.model import NeRF
+from py.timer import Timer
+from py.addtional import getBounds, ProposalLoss, ProposalNetwork
+from py.nerf_helper import nan_hook, saveModel
+from py.mip_methods import ipe_feature, maxBlurFilter
+from py.utils import fov2Focal, inverseSample, getSummaryWriter, validSampler, randomFromOneImage, getRadius
 
 default_chkpt_path = "./check_points/"
 default_model_path = "./model/"
@@ -84,8 +86,8 @@ def main():
 
     eval_time           = args.eval_time
     dataset_name        = args.dataset_name
-    load_path_coarse    = default_chkpt_path + args.name + "_coarse.pt"
-    load_path_fine      = default_chkpt_path + args.name + "_fine.pt"
+    load_path_mip       = default_chkpt_path + args.name + "_mip.pt"
+    load_path_prop      = default_chkpt_path + args.name + "_prop.pt"
     # Bool options
     del_dir             = args.del_dir
     use_load            = args.load
@@ -102,6 +104,7 @@ def main():
     # ======= instantiate model =====
     # NOTE: model is recommended to have loadFromFile method
     mip_net = NeRF(10, 4).cuda()
+    prop_net = ProposalNetwork(10).cuda()
     if debugging:
         for submodule in mip_net.modules():
             submodule.register_forward_hook(nan_hook)
@@ -109,14 +112,17 @@ def main():
 
     # ======= Loss function ==========
     loss_func = lambda x, y : torch.mean((x - y) ** 2)
+    prop_loss_func = ProposalLoss().cuda()
     # ======= Optimizer and scheduler ========
-    opt = optim.Adam(params = mip_net.parameters(), lr = 4.5e-4, betas=(0.9, 0.999))
+    grad_vars = list(mip_net.parameters()) + list(prop_net.parameters())
+    opt = optim.Adam(params = grad_vars, lr = 4.5e-4, betas=(0.9, 0.999))
     if use_amp:
-        mip_net, opt = amp.initialize(mip_net, opt, opt_level=opt_level)
-    if use_load == True and os.path.exists(load_path_coarse) and os.path.exists(load_path_fine):
-        mip_net.loadFromFile(load_path_fine, use_amp, opt)
+        [mip_net, prop_net], opt = amp.initialize([mip_net, prop_net], opt, opt_level=opt_level)
+    if use_load == True and os.path.exists(load_path_mip) and os.path.exists(load_path_prop):
+        mip_net.loadFromFile(load_path_mip, use_amp, opt)
+        prop_net.loadFromFile(load_path_prop, use_amp, opt)
     else:
-        print("Not loading or load path '%s' or '%s' does not exist."%(load_path_coarse, load_path_fine))
+        print("Not loading or load path '%s' or '%s' does not exist."%(load_path_mip, load_path_prop))
     def lr_func(x:int, alpha:float, min_ratio:float):
         val = alpha**x
         return val if val > min_ratio else min_ratio
@@ -159,24 +165,26 @@ def main():
             train_tf = train_tf.cuda().squeeze(0)
             now_crop = (center_crop if train_cnt < center_crop_iter else 1.)
             valid_pixels, valid_coords = randomFromOneImage(train_img, now_crop)
-            # sampler需要修改，mip nerf都不需要实际的采样点，而只需要zvals，并且需要多采样一个点才能得到需要的cone个数
+
+            # sample one more t to form (coarse_sample_pnum) proposal interval
             coarse_lengths, rgb_targets, coarse_cam_rays = validSampler(
                 valid_pixels, valid_coords, train_tf, sample_ray_num, coarse_sample_pnum + 1, 400, 400, train_focal, near_t, far_t, False
             )
             ipe_pts, mu_pts, mu_ts = ipe_feature(coarse_lengths, coarse_cam_rays, 10, pixel_width)
-            samples = torch.cat((mu_pts, coarse_cam_rays.unsqueeze(-2).repeat(1, coarse_sample_pnum, 1)), dim = -1)
-            coarse_rgbo = mip_net.forward(samples, ipe_pts)
+            density = prop_net.forward(mu_pts, ipe_pts)
+            prop_weights = ProposalNetwork.get_weights(density, mu_ts, coarse_cam_rays[:, 3:])      # (ray_num, num of proposal interval)
 
-            coarse_rendered, weights = NeRF.render(coarse_rgbo, mu_ts, coarse_cam_rays[:, 3:])
-            filtered_weights = maxBlurFilter(weights, 0.01)
-            fine_lengths = inverseSample(filtered_weights, mu_ts, fine_sample_pnum + 1)
+            prop_weights = maxBlurFilter(prop_weights, 0.01)
+            fine_lengths, sort_inds, below_idxs = inverseSample(prop_weights, mu_ts, fine_sample_pnum + 1, sort = True)
             ipe_pts, mu_pts, mu_ts = ipe_feature(fine_lengths, coarse_cam_rays, 10, pixel_width)
             samples = torch.cat((mu_pts, coarse_cam_rays.unsqueeze(-2).repeat(1, fine_sample_pnum, 1)), dim = -1)
-            # 此处存在逻辑问题，需要第二次sort，并且RGB需要整理出来
             fine_rgbo = mip_net.forward(samples)
-            fine_rendered, _ = NeRF.render(fine_rgbo, mu_ts, coarse_cam_rays[:, 3:])
+            fine_rendered, weights = NeRF.render(fine_rgbo, mu_ts, coarse_cam_rays[:, 3:])
 
-            loss:torch.Tensor = loss_func(coarse_rendered, rgb_targets) + loss_func(fine_rendered, rgb_targets)
+            weight_bounds:torch.Tensor = getBounds(prop_weights, below_idxs, sort_inds)     # output shape: (ray_num, num of conical frustum)
+            prop_loss:torch.Tensor = prop_loss_func(weight_bounds, weights.detach())             # stop the gradient of NeRF MLP 
+            loss:torch.Tensor = prop_loss + loss_func(fine_rendered, rgb_targets)
+
             train_timer.toc()
             if use_amp:
                 with amp.scale_loss(loss, opt) as scaled_loss:

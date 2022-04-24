@@ -8,7 +8,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from apex import amp
-from py.utils import makeMLP
+from py.nerf_helper import makeMLP, positional_encoding
 # import tinycudann as tcnn
 
 # This module is shared by coarse and fine network, with no need to modify
@@ -64,17 +64,6 @@ class NeRF(nn.Module):
             amp.load_state_dict(save['amp'])
         print("NeRF Model loaded from '%s'"%(load_path))
 
-    @staticmethod
-    def positional_encoding(x:torch.Tensor, freq_level:int) -> torch.Tensor:
-        result = []
-        ray_num, point_num = x.shape[0], x.shape[1]
-        for fid in range(freq_level):
-            freq = 2. ** fid
-            for func in (torch.sin, torch.cos):
-                result.append(func(freq * x.unsqueeze(-2)))
-        encoded = torch.cat(result, dim = -2).view(ray_num, point_num, -1)
-        return encoded
-
     # for coarse network, input is obtained by sampling, sampling result is (ray_num, point_num, 9), (depth) (ray_num, point_num)
     # TODO: fine-network输入的point_num是192，会产生影响吗？
     def forward(self, pts:torch.Tensor, encoded_pt:torch.Tensor = None) -> torch.Tensor:
@@ -82,10 +71,10 @@ class NeRF(nn.Module):
         if not encoded_pt is None:
             encoded_x = encoded_pt
         else:
-            encoded_x = NeRF.positional_encoding(pts[:, :, :3], self.position_flevel)
+            encoded_x = positional_encoding(pts[:, :, :3], self.position_flevel)
         rotation = pts[:, :, 3:6].reshape(-1, 3)
         rotation = rotation / rotation.norm(dim = -1, keepdim = True)
-        encoded_r = NeRF.positional_encoding(rotation, self.direction_flevel)
+        encoded_r = positional_encoding(rotation, self.direction_flevel)
         encoded_x = encoded_x.view(pts.shape[0], pts.shape[1], position_dim)
         encoded_r = encoded_r.view(pts.shape[0], pts.shape[1], direction_dim)
 

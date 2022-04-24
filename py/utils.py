@@ -30,15 +30,18 @@ def generateTestSamples(ray_num:int, coarse_pnum:int, sigma_factor:float = 0.1):
     return torch.cat(result, dim = 0).float().cuda()
 
 # float32. Shape of ray: (ray_num, 6) --> (origin, direction)
-def inverseSample(weights:torch.Tensor, coarse_depth:torch.Tensor, sample_pnum:int) -> torch.Tensor:
+def inverseSample(weights:torch.Tensor, coarse_depth:torch.Tensor, sample_pnum:int, sort:bool = False) -> torch.Tensor:
     if weights.requires_grad == True:
         weights = weights.detach()
     # cdf = torch.cumsum(weights, dim = -1)
     z_vals_mid = .5 * (coarse_depth[...,1:] + coarse_depth[...,:-1])
-    z_samples, idxs = sample_pdf(z_vals_mid, weights[...,1:-1], sample_pnum, det=False, pytest=False)
-    # invTransformSample(cdf, sample_depth, sample_pnum, near, far)
+    z_samples, idxs = sample_pdf(z_vals_mid, weights[...,1:-1], sample_pnum)
     # idxs is the lower and upper indices of inverse sampling intervals, which is of shape (ray_num, sample_num, 2)
-    return z_samples, idxs          # depth is used for rendering
+    # TODO: 此处需要sort
+    if sort:
+        z_samples, sort_inds = torch.sort(z_samples, dim = -1)
+        return z_samples, sort_inds, idxs          # depth is used for rendering
+    return z_samples
 
 # input (all training images, center_crop ratio)
 def randomFromOneImage(img:torch.Tensor, center_crop:float):
@@ -99,6 +102,7 @@ def sample_pdf(bins, weights, N_samples):
     u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
 
     # Invert CDF
+    # 这里的处理还是有点问题，需要sort
     u = u.cuda().contiguous()
     inds = torch.searchsorted(cdf, u, right=True)
     below = torch.max(torch.zeros_like(inds-1), inds-1).cuda()
@@ -116,35 +120,4 @@ def sample_pdf(bins, weights, N_samples):
     t = (u-cdf_g[...,0])/denom
     samples = bins_g[...,0] + t * (bins_g[...,1]-bins_g[...,0])
 
-    return samples, inds_g
-
-def saveModel(model, path:str, opt = None, amp = None):
-    checkpoint = {'model': model.state_dict(),}
-    if not amp is None:
-        checkpoint['amp'] =  amp.state_dict()
-    if not opt is None:
-        checkpoint['optimizer'] = opt.state_dict()
-    torch.save(checkpoint, path)
-
-
-# ================ Model related ===============
-def makeMLP(in_chan, out_chan, act = torch.nn.ReLU(), batch_norm = False):
-    modules = [torch.nn.Linear(in_chan, out_chan)]
-    if batch_norm == True:
-        modules.append(torch.nn.BatchNorm1d(out_chan))
-    if not act is None:
-        modules.append(act)
-    return modules
-
-# from pytorch.org https://discuss.pytorch.org/t/finding-source-of-nan-in-forward-pass/51153/2
-def nan_hook(self, inp, output):
-    if not isinstance(output, tuple):
-        outputs = [output]
-    else:
-        outputs = output
-
-    for i, out in enumerate(outputs):
-        nan_mask = torch.isnan(out)
-        if nan_mask.any():
-            print("In", self.__class__.__name__)
-            raise RuntimeError(f"Found NAN in output {i} at indices: ", nan_mask.nonzero(), "where:", out[nan_mask.nonzero()[:, 0].unique(sorted=True)])
+    return samples, below
