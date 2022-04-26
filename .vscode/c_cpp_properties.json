@@ -6,10 +6,7 @@
                 "/usr/include/**",
                 "/usr/include/eigen3/**",
                 "/usr/local/include/**",
-                "${workspaceFolder}/cuda/**",
-                "/usr/local/cuda-11.4/include/**",
-                "/opt/libtorch/include/**",
-                "/opt/libtorch/include/torch/csrc/api/include/**"
+                "/usr/local/cuda-11.3/include/**"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/gcc",

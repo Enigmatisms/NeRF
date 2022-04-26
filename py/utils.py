@@ -10,6 +10,7 @@ import shutil
 from datetime import datetime
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
+from scipy.spatial.transform import Rotation as R
 
 def getSummaryWriter(epochs:int, del_dir:bool):
     logdir = './logs/'
@@ -30,14 +31,18 @@ def generateTestSamples(ray_num:int, coarse_pnum:int, sigma_factor:float = 0.1):
     return torch.cat(result, dim = 0).float().cuda()
 
 # float32. Shape of ray: (ray_num, 6) --> (origin, direction)
-def inverseSample(weights:torch.Tensor, coarse_depth:torch.Tensor, sample_pnum:int) -> torch.Tensor:
+def inverseSample(weights:torch.Tensor, coarse_depth:torch.Tensor, sample_pnum:int, sort:bool = False) -> torch.Tensor:
     if weights.requires_grad == True:
         weights = weights.detach()
     # cdf = torch.cumsum(weights, dim = -1)
     z_vals_mid = .5 * (coarse_depth[...,1:] + coarse_depth[...,:-1])
-    z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], sample_pnum, det=False, pytest=False)
-    # invTransformSample(cdf, sample_depth, sample_pnum, near, far)
-    return z_samples          # depth is used for rendering
+    z_samples, idxs = sample_pdf(z_vals_mid, weights[...,1:-1], sample_pnum)
+    # idxs is the lower and upper indices of inverse sampling intervals, which is of shape (ray_num, sample_num, 2)
+    # TODO: 此处需要sort
+    if sort:
+        z_samples, sort_inds = torch.sort(z_samples, dim = -1)
+        return z_samples, sort_inds, idxs          # depth is used for rendering
+    return z_samples
 
 # input (all training images, center_crop ratio)
 def randomFromOneImage(img:torch.Tensor, center_crop:float):
@@ -61,7 +66,7 @@ def randomFromOneImage(img:torch.Tensor, center_crop:float):
         return img.view(3, -1).transpose(0, 1).contiguous(), coords.view(-1, 2)
 
 # new valid sampler returns sampled points, sampled length, rgb gt value and camera ray origin and direction
-def validSampler(rgbs:torch.Tensor, coords:torch.Tensor, cam_tf:torch.Tensor, ray_num:int, point_num:int, w:int, h:int, focal:float, near:float, far:float):
+def validSampler(rgbs:torch.Tensor, coords:torch.Tensor, cam_tf:torch.Tensor, ray_num:int, point_num:int, w:int, h:int, focal:float, near:float, far:float, output_samples = True):
     target_device = rgbs.device
     max_id = coords.shape[0]
     indices = torch.randint(0, max_id, (ray_num,)).to(target_device)
@@ -71,42 +76,33 @@ def validSampler(rgbs:torch.Tensor, coords:torch.Tensor, cam_tf:torch.Tensor, ra
     all_lengths = torch.linspace(near, far - resolution, point_num).to(target_device)
     lengths = all_lengths + torch.rand((ray_num, point_num)).to(target_device) * resolution
     # sampled coords is (col_id, col_id)
-    ray_raw = torch.sum(torch.cat([sampled_coords / focal, -torch.ones(sampled_coords.shape[0], 1, dtype = torch.float32).to(target_device)], dim = -1).unsqueeze(-2) * cam_tf[:, :-1], dim = -1)
+    if output_samples:
+        ray_raw = torch.sum(torch.cat([sampled_coords / focal, -torch.ones(sampled_coords.shape[0], 1, dtype = torch.float32).to(target_device)], dim = -1).unsqueeze(-2) * cam_tf[:, :-1], dim = -1)
+        pts = cam_tf[:, -1] + ray_raw[:, None, :] * lengths[:, :, None]
+        return torch.cat((pts, ray_raw.unsqueeze(-2).repeat(1, point_num, 1)), dim = -1), lengths, output_rgb, torch.cat((cam_tf[:, -1].unsqueeze(0).repeat(ray_raw.shape[0], 1), ray_raw), dim = -1)
+    ray_raw = torch.sum(torch.cat([(sampled_coords) / focal, -torch.ones(sampled_coords.shape[0], 1, dtype = torch.float32).to(target_device)], dim = -1).unsqueeze(-2) * cam_tf[:, :-1], dim = -1)
     # return shape (ray_num, point_num, 3), (ray_num, point_num), rgb(ray_num, rgb), cams(ray_num, ray_dir, ray_t)
-    pts = cam_tf[:, -1] + ray_raw[:, None, :] * lengths[:, :, None]
+    return lengths, output_rgb, torch.cat((cam_tf[:, -1].unsqueeze(0).repeat(ray_raw.shape[0], 1), ray_raw), dim = -1)
     # ray_raw is of shape (ray_num, 3)
-    return torch.cat((pts, ray_raw.unsqueeze(-2).repeat(1, point_num, 1)), dim = -1), lengths, output_rgb, torch.cat((cam_tf[:, -1].unsqueeze(0).repeat(ray_raw.shape[0], 1), ray_raw), dim = -1)
 
 def fov2Focal(fov:float, img_width:float) -> float:
     return .5 * img_width / np.tan(.5 * fov)
 
+def getRadius(focal:float):
+    return 1 / focal * 2 / np.sqrt(12.)
+
 # From official implementation, since using APEX will change the dtype of inputs, plain CUDA (with no template) won't work
-def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
+def sample_pdf(bins, weights, N_samples):
     # Get pdf
     weights = weights + 1e-5 # prevent nans
     pdf = weights / torch.sum(weights, -1, keepdim=True)
     cdf = torch.cumsum(pdf, -1)
     cdf = torch.cat([torch.zeros_like(cdf[...,:1]), cdf], -1)  # (batch, len(bins))
 
-    # Take uniform samples
-    if det:
-        u = torch.linspace(0., 1., steps=N_samples)
-        u = u.expand(list(cdf.shape[:-1]) + [N_samples])
-    else:
-        u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
-
-    # Pytest, overwrite u with numpy's fixed random numbers
-    if pytest:
-        np.random.seed(0)
-        new_shape = list(cdf.shape[:-1]) + [N_samples]
-        if det:
-            u = np.linspace(0., 1., N_samples)
-            u = np.broadcast_to(u, new_shape)
-        else:
-            u = np.random.rand(*new_shape)
-        u = torch.Tensor(u)
+    u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
 
     # Invert CDF
+    # 这里的处理还是有点问题，需要sort
     u = u.cuda().contiguous()
     inds = torch.searchsorted(cdf, u, right=True)
     below = torch.max(torch.zeros_like(inds-1), inds-1).cuda()
@@ -124,12 +120,30 @@ def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
     t = (u-cdf_g[...,0])/denom
     samples = bins_g[...,0] + t * (bins_g[...,1]-bins_g[...,0])
 
-    return samples
+    return samples, below
 
-def saveModel(model, path:str, opt = None, amp = None):
-    checkpoint = {'model': model.state_dict(),}
-    if not amp is None:
-        checkpoint['amp'] =  amp.state_dict()
-    if not opt is None:
-        checkpoint['optimizer'] = opt.state_dict()
-    torch.save(checkpoint, path)
+# functions from nerf-pytorch
+trans_t = lambda t : torch.Tensor([
+    [1,0,0,0],
+    [0,1,0,0],
+    [0,0,1,t],
+    [0,0,0,1]]).float()
+
+rot_phi = lambda phi : torch.Tensor([
+    [1,0,0,0],
+    [0,np.cos(phi),-np.sin(phi),0],
+    [0,np.sin(phi), np.cos(phi),0],
+    [0,0,0,1]]).float()
+
+rot_theta = lambda th : torch.Tensor([
+    [np.cos(th),0,-np.sin(th),0],
+    [0,1,0,0],
+    [np.sin(th),0, np.cos(th),0],
+    [0,0,0,1]]).float()
+
+def pose_spherical(theta, phi, radius):
+    c2w = trans_t(radius)
+    c2w = rot_phi(phi/180.*np.pi) @ c2w         # rotate around x axis (pitch angle)
+    c2w = rot_theta(theta/180.*np.pi) @ c2w     # rotate around y axis (yaw angle)
+    c2w = torch.Tensor(np.array([[-1,0,0,0],[0,0,1,0],[0,1,0,0],[0,0,0,1]])) @ c2w  # COLMAP (x, -y, -z), from cam coords (z points front) to world (z point upwards)
+    return c2w

@@ -29,7 +29,7 @@ def sampleVisualize(samples:torch.Tensor):
 def invSamplerTest(samples:torch.Tensor):
     PNUM_SAMPLE = 128
     rays = torch.FloatTensor([0, 0, 0, 1, 1, 0]).repeat(repeats = (4096, 1)).cuda()
-    output, _ = inverseSample(samples, rays, PNUM_SAMPLE)
+    output = inverseSample(samples, rays, PNUM_SAMPLE)
     axis = plt.axes(projection='3d')
     points = output.cpu()
     axis.scatter(points[0, :, 0], points[0, :, 1], points[0, :, 2])
