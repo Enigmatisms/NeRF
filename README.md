@@ -1,10 +1,30 @@
 # NeRF
 
 ---
+#### 4.25 Update
+
+To boost the resulting quality, two more approaches are incorporated in this repo:
+The idea from [ICCV 2021: Mip-NeRF: A Multiscale Representation for Anti-Aliasing Neural Radiance Fields](https://jonbarron.info/mipnerf/), using conical frustum instead of pure points in sampling, trying to solve the problem of aliasing under multi-resolution settings. Removed the use of coarse network.
+
+The idea from [CVPR 2022: Mip-NeRF 360: Unbounded Anti-Aliased Neural Radiance Fields](https://paperswithcode.com/paper/mip-nerf-360-unbounded-anti-aliased-neural/review/), which currently has no open-sourced code:
+
+- Using shallower proposal network distilled from NeRF MLP weight rendering, in order to reduce the evaluation time for coarse samples.
+- Using weight regularizer which aims to concentrate computed weight in a smaller region, make it more "delta-function-like". The final output is more accurate. Here are the result and a small comparison:
+
+The second blog about the latest re-implementation is to be posted.
+
+|   Spherical views (400 * 400)    |          Comparison (no regularizer - left)           |   Proposal network distillation   |
+| :------------------------------: | :---------------------------------------------------: | :-------------------------------: |
+| <img src="assets/sphere.gif"  /> | <img src="assets/comparison.png" style="zoom:80%;" /> | ![](assets/proposal_dist_076.png) |
+
+
+
+---
+
 Re-implementation of ECCV 2020 NeRF with PyTorch:
 
 - [Representing Scenes as Neural Radiance Fields for View Synthesis](https://www.matthewtancik.com/nerf)
-- 能训练出来真是太舒服啦
+- More information ? Refer to my blog about this reimplementation: [enigmatisms.github.io/NeRF论文复现](https://enigmatisms.github.io/2022/03/27/NeRF%E8%AE%BA%E6%96%87%E5%A4%8D%E7%8E%B0/)
 
 Quick overview for a 10-hour training results (single view rendering, APEX O2 optimized) in nerf-blender-synthetic dataset (drums):
 
