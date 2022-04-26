@@ -4,6 +4,7 @@
     Implementation related with mip NeRF 360
 """
 
+from turtle import forward
 import torch
 from apex import amp
 from torch import nn
@@ -26,6 +27,23 @@ class ProposalLoss(nn.Module):
     def forward(self, prop_bounds:torch.Tensor, nerf_weights:torch.Tensor) -> torch.Tensor:
         bound_diff = (F.relu(nerf_weights - prop_bounds)) ** 2
         return torch.sum(bound_diff / (nerf_weights + 1e-8))
+
+class Regularizer(nn.Module):
+    def __init__(self) -> None: super().__init__()
+    # inputs are of the same shape (ray_num, num of cones)
+    def forward(self, weights:torch.Tensor, mu_ts:torch.Tensor, fine_ts:torch.Tensor):
+        dists = torch.abs(mu_ts[:, None, :] - mu_ts[..., None])
+        dists = dists / dists.norm(dim = -1, keepdim = True)
+        mult_ws =  weights[:, None, :] * weights[..., None]
+        delta = fine_ts[..., 1:] - fine_ts[..., :-1]
+        return torch.mean(mult_ws * dists) + torch.mean(delta * (weights ** 2)) / 3.
+
+class SoftL1Loss(nn.Module):
+    def __init__(self, epsilon = 0.001) -> None: 
+        super().__init__()
+        self.eps = epsilon
+    def forward(self, pred:torch.Tensor, target:torch.Tensor):
+        return torch.mean(torch.sqrt(self.eps ** 2 + (pred - target) ** 2))
 
 class ProposalNetwork(nn.Module):
     @staticmethod

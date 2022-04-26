@@ -5,6 +5,7 @@
 import os
 import torch
 import argparse
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 from torchvision import transforms
 
@@ -16,10 +17,10 @@ from py.dataset import CustomDataSet
 from torchvision.utils import save_image
 from py.model import NeRF
 from py.timer import Timer
-from py.addtional import getBounds, ProposalLoss, ProposalNetwork
+from py.addtional import getBounds, ProposalLoss, ProposalNetwork, SoftL1Loss, Regularizer
 from py.nerf_helper import nan_hook, saveModel
 from py.mip_methods import ipe_feature, maxBlurFilter
-from py.utils import fov2Focal, inverseSample, getSummaryWriter, validSampler, randomFromOneImage, getRadius
+from py.utils import fov2Focal, inverseSample, getSummaryWriter, validSampler, randomFromOneImage, getRadius, pose_spherical
 
 default_chkpt_path = "./check_points/"
 default_model_path = "./model/"
@@ -48,7 +49,13 @@ parser.add_argument("-l", "--load", default = False, action = "store_true", help
 parser.add_argument("-s", "--use_scaler", default = False, action = "store_true", help = "Use AMP scaler to speed up")
 parser.add_argument("-b", "--debug", default = False, action = "store_true", help = "Code debugging (detect gradient anomaly and NaNs)")
 parser.add_argument("-v", "--visualize", default = False, action = "store_true", help = "Visualize proposal network")
+parser.add_argument("-r", "--do_render", default = False, action = "store_true", help = "Only render the result")
 args = parser.parse_args()
+
+transform_funcs = transforms.Compose([
+    transforms.Resize((400, 400)),
+    transforms.ToTensor(),
+])
 
 def render_image(network:NeRF, render_pose:torch.Tensor, image_size:int, focal:float, near:float, far:float, sample_num:int=128, pixel_width:float=0.0) -> torch.Tensor:
     target_device = render_pose.device
@@ -116,7 +123,8 @@ def main():
         torch.autograd.set_detect_anomaly(True)
 
     # ======= Loss function ==========
-    loss_func = lambda x, y : torch.mean((x - y) ** 2)
+    loss_func = SoftL1Loss()
+    reg_loss_func = Regularizer()
     prop_loss_func = ProposalLoss().cuda()
     # ======= Optimizer and scheduler ========
     grad_vars = list(mip_net.parameters()) + list(prop_net.parameters())
@@ -133,10 +141,7 @@ def main():
         return val if val > min_ratio else min_ratio
     preset_lr_func = partial(lr_func, alpha = args.alpha, min_ratio = args.min_ratio)
     sch = optim.lr_scheduler.LambdaLR(opt, lr_lambda = preset_lr_func, last_epoch=-1)
-    transform_funcs = transforms.Compose([
-        transforms.Resize((400, 400)),
-        transforms.ToTensor(),
-    ])
+
     # 数据集加载
     trainset = CustomDataSet("../dataset/nerf_synthetic/%s/"%(dataset_name), transform_funcs, True, use_alpha = False)
     testset = CustomDataSet("../dataset/nerf_synthetic/%s/"%(dataset_name), transform_funcs, False, use_alpha = False)
@@ -144,7 +149,6 @@ def main():
     train_cam_tf = train_cam_tf[0].cuda()
 
     train_loader = DataLoader(trainset, 1, shuffle = True, num_workers = 4)
-
     cam_fov_test, tmp = testset.getCameraParam()
     del tmp
     train_focal = fov2Focal(cam_fov_train, 400)
@@ -188,7 +192,7 @@ def main():
             # (mu_ts and weights) (coarse_length & prop_weights should be visualized)
             weight_bounds:torch.Tensor = getBounds(prop_weights, below_idxs, sort_inds)     # output shape: (ray_num, num of conical frustum)
             prop_loss:torch.Tensor = prop_loss_func(weight_bounds, weights.detach())             # stop the gradient of NeRF MLP 
-            loss:torch.Tensor = prop_loss + loss_func(fine_rendered, rgb_targets)
+            loss:torch.Tensor = prop_loss + loss_func(fine_rendered, rgb_targets) + 0.01 * reg_loss_func(weights, mu_ts, fine_lengths)
 
             train_timer.toc()
             if use_amp:
@@ -252,9 +256,34 @@ def main():
                 %(ep, epochs, epoch_timer.get_mean_time(), epoch_timer.remaining_time(epochs - ep - 1))
         )
     # ======== Saving the model ========
-    saveModel(mip_net,  "%model_%d_mip.pth"%(default_model_path, 2), opt = None, amp = (amp) if use_amp else None)
+    saveModel(mip_net,  "%smodel_%d_mip.pth"%(default_model_path, 2), opt = None, amp = (amp) if use_amp else None)
     writer.close()
     print("Output completed.")
 
+def render_only():
+    use_amp             = args.use_scaler
+    load_path_mip       = default_model_path + args.name + "_mip.pth"
+    near_t              = args.near
+    far_t               = args.far
+    dataset_name        = args.dataset_name
+    testset = CustomDataSet("../dataset/nerf_synthetic/%s/"%(dataset_name), transform_funcs, False, use_alpha = False)
+
+    cam_fov_test, _ = testset.getCameraParam()
+    test_focal = fov2Focal(cam_fov_test, 400)
+    pixel_width = getRadius(test_focal)
+
+    mip_net = NeRF(10, 4).cuda()
+    mip_net.loadFromFile(load_path_mip, use_amp)
+    all_poses = torch.stack([pose_spherical(angle, -30.0, 4.0) for angle in torch.linspace(-180,180,80+1)[:-1]], 0).cuda()
+    mip_net.eval()
+    with torch.no_grad():
+        for i, pose in tqdm(enumerate(all_poses)):
+            image = render_image(mip_net, pose[:-1, :], 400, test_focal, near_t, far_t, 128, pixel_width = pixel_width)
+            save_image(image, "./output/sphere/result_%03d.png"%(i), nrow = 1)
+
 if __name__ == "__main__":
-    main()
+    do_render = args.do_render
+    if do_render:
+        render_only()
+    else:
+        main()
