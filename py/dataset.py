@@ -67,3 +67,11 @@ class CustomDataSet(data.Dataset):
             tfs = tfs.cuda()
             return cam_fov, tfs, torch.stack(result, dim = 0).float().cuda()
         return cam_fov, tfs, torch.stack(result, dim = 0).float()
+
+
+class CustomDataSet2(CustomDataSet):
+    def __getitem__(self, idx):
+        idx_ext = np.random.choice(self.__len__())
+        img0, tfs0 = super().__getitem__(idx)
+        img1, tfs1 = super().__getitem__(idx_ext)
+        return img0, tfs0, img1, tfs1

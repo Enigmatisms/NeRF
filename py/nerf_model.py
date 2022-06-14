@@ -8,7 +8,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from apex import amp
-from py.nerf_helper import makeMLP, positional_encoding
+from nerf_helper import makeMLP, positional_encoding
 # import tinycudann as tcnn
 
 # This module is shared by coarse and fine network, with no need to modify
@@ -119,7 +119,7 @@ class NeRF(nn.Module):
         alpha:torch.Tensor = 1. - mult
         # fusion requires normalization, rgb output should be passed through sigmoid
         weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).cuda(), mult + 1e-10], -1), -1)[:, :-1]
-        return weights
+        return weights, alpha
 
     # depth shape: (ray_num, point_num)
     # need the norm of rays, shape: (ray_num, point_num)
@@ -128,9 +128,10 @@ class NeRF(nn.Module):
         depth = depth * (ray_dirs.norm(dim = -1, keepdim = True))
         rgb:torch.Tensor = rgbo[..., :3] # shape (ray_num, pnum, 3)
         opacity:torch.Tensor = rgbo[..., -1]             # 1e-5 is used for eliminating numerical instability
-        weights = NeRF.getNormedWeight(opacity, depth)
+        weights, alpha = NeRF.getNormedWeight(opacity, depth)
         weighted_rgb:torch.Tensor = weights[:, :, None] * rgb
-        return torch.sum(weighted_rgb, dim = -2), weights     # output (ray_num, 3) and (ray_num, point_num)
+        acc = torch.sum(weights, -1)
+        return torch.sum(weighted_rgb, dim = -2), alpha, weights, acc     # output (ray_num, 3) and (ray_num, point_num)
 
 if __name__ == "__main__":
     print("Hello NeRF world!")

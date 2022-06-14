@@ -6,7 +6,7 @@
                 "/usr/include/**",
                 "/usr/include/eigen3/**",
                 "/usr/local/include/**",
-                "/usr/local/cuda-11.3/include/**"
+                "/usr/local/cuda-10.2/include/**"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/gcc",

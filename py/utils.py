@@ -57,7 +57,7 @@ def randomFromOneImage(img:torch.Tensor, center_crop:float):
     else:
         x_lb = y_lb = 0
         x_ub, y_ub = img.shape[2], img.shape[1]
-    row_ids, col_ids = torch.meshgrid(torch.arange(x_lb, x_ub), torch.arange(y_lb, y_ub), indexing = 'ij')
+    row_ids, col_ids = torch.meshgrid(torch.arange(x_lb, x_ub), torch.arange(y_lb, y_ub))
     coords = torch.stack((col_ids - half_w, half_h - row_ids), dim = -1).to(target_device)
     # returned values are flattened
     if center_crop < 9.9e-1:

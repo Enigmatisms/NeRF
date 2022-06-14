@@ -13,14 +13,15 @@ from torch import optim
 from torch.utils.data import DataLoader
 
 from functools import partial
-from py.dataset import CustomDataSet
+from dataset import CustomDataSet, CustomDataSet2
 from torchvision.utils import save_image
-from py.model import NeRF
-from py.timer import Timer
-from py.addtional import getBounds, ProposalLoss, ProposalNetwork, SoftL1Loss
-from py.nerf_helper import nan_hook, saveModel
-from py.mip_methods import maxBlurFilter
-from py.utils import fov2Focal, inverseSample, getSummaryWriter, validSampler, randomFromOneImage, getRadius, pose_spherical
+from nerf_model import NeRF
+from timer import Timer
+from addtional import getBounds, ProposalLoss, ProposalNetwork, SoftL1Loss, Regularizer
+from nerf_helper import nan_hook, saveModel
+from mip_methods import ipe_feature, maxBlurFilter
+from utils import fov2Focal, inverseSample, getSummaryWriter, validSampler, randomFromOneImage, getRadius, pose_spherical
+from loss import EntropyLoss
 
 OPT_LEVEL = 'O1'
 default_chkpt_path = "./check_points/"
@@ -31,7 +32,7 @@ parser = argparse.ArgumentParser()
 # general args
 parser.add_argument("--epochs", type = int, default = 2000, help = "Training lasts for . epochs")
 parser.add_argument("--ep_start", type = int, default = 0, help = "Start epoches from <ep_start>")
-parser.add_argument("--sample_ray_num", type = int, default = 1024, help = "<x> rays to sample per training time")
+parser.add_argument("--sample_ray_num", type = int, default = 512, help = "<x> rays to sample per training time")
 parser.add_argument("--coarse_sample_pnum", type = int, default = 64, help = "Points to sample in coarse net")
 parser.add_argument("--fine_sample_pnum", type = int, default = 128, help = "Points to sample in fine net")
 parser.add_argument("--eval_time", type = int, default = 5, help = "Tensorboard output interval (train time)")
@@ -40,7 +41,7 @@ parser.add_argument("--near", type = float, default = 2., help = "Nearest sample
 parser.add_argument("--far", type = float, default = 6., help = "Farthest sample depth")
 parser.add_argument("--center_crop", type = float, default = 0.5, help = "Farthest sample depth")
 parser.add_argument("--name", type = str, default = "model_1", help = "Model name for loading")
-parser.add_argument("--dataset_name", type = str, default = "lego", help = "Input dataset name in nerf synthetic dataset")
+parser.add_argument("--dataset_name", type = str, default = "lego_few", help = "Input dataset name in nerf synthetic dataset")
 # opt related
 parser.add_argument("--min_ratio", type = float, default = 0.05, help = "lr exponential decay, final / intial min ratio")
 parser.add_argument("--alpha", type = float, default = 0.9995, help = "lr exponential decay rate")
@@ -51,6 +52,29 @@ parser.add_argument("-s", "--use_scaler", default = False, action = "store_true"
 parser.add_argument("-b", "--debug", default = False, action = "store_true", help = "Code debugging (detect gradient anomaly and NaNs)")
 parser.add_argument("-v", "--visualize", default = False, action = "store_true", help = "Visualize proposal network")
 parser.add_argument("-r", "--do_render", default = False, action = "store_true", help = "Only render the result")
+#entropy
+parser.add_argument("--N_entropy", type=int, default=512,
+                    help='number of entropy ray')
+# entropy type
+parser.add_argument("--entropy", action='store_true',
+                    help='using entropy ray loss')
+parser.add_argument("--entropy_log_scaling", action='store_true',
+                    help='using log scaling for entropy loss')
+parser.add_argument("--entropy_ignore_smoothing", action='store_true',
+                    help='ignoring entropy for ray for smoothing')
+parser.add_argument("--entropy_end_iter", type=int, default=None,
+                    help='end iteratio of entropy')
+parser.add_argument("--entropy_type", type=str, default='log2', choices=['log2', '1-p'],
+                    help='choosing type of entropy')
+parser.add_argument("--entropy_acc_threshold", type=float, default=0.1,
+                    help='threshold for acc masking')
+parser.add_argument("--computing_entropy_all", action='store_true',
+                    help='computing entropy for both seen and unseen ')
+#lambda
+parser.add_argument("--entropy_ray_lambda", type=float, default=1,
+                    help='entropy lambda for ray entropy loss')
+parser.add_argument("--entropy_ray_zvals_lambda", type=float, default=1,
+                    help='entropy lambda for ray zvals entropy loss')
 args = parser.parse_args()
 
 transform_funcs = transforms.Compose([
@@ -60,12 +84,12 @@ transform_funcs = transforms.Compose([
 
 def render_image(network:NeRF, prop_net:ProposalNetwork, render_pose:torch.Tensor, image_size:int, focal:float, near:float, far:float, sample_num:int=128, pixel_width:float=0.0) -> torch.Tensor:
     target_device = render_pose.device
-    col_idxs, row_idxs = torch.meshgrid(torch.arange(image_size), torch.arange(image_size), indexing = 'xy')
+    col_idxs, row_idxs = torch.meshgrid(torch.arange(image_size), torch.arange(image_size))
     coords = torch.stack((col_idxs - image_size / 2, image_size / 2 - row_idxs), dim = -1).to(target_device) / focal
     coords = torch.cat((coords, -torch.ones(image_size, image_size, 1, dtype = torch.float32, device = target_device).cuda()), dim = -1)
     ray_raw = torch.sum(coords.unsqueeze(-2) * render_pose[..., :-1], dim = -1)     # shape (H, W, 3)
 
-    all_lengths = torch.linspace(near, far, 64, device = target_device)
+    all_lengths = torch.linspace(near, far, 65, device = target_device)
 
     resulting_image = torch.zeros((3, image_size, image_size), dtype = torch.float32, device = target_device)
     patch_num = image_size // 50
@@ -74,23 +98,22 @@ def render_image(network:NeRF, prop_net:ProposalNetwork, render_pose:torch.Tenso
     # TODO: render是否也需要改成 cone rendering？需要用mu_t进行渲染
     for k in range(patch_num):
         for j in range(patch_num):
-            sampled_lengths = (all_lengths + torch.rand((50, 50, 64)).cuda() * resolution).view(-1, 64)        # shape (2500, sample_num)
+            sampled_lengths = (all_lengths + torch.rand((50, 50, 65)).cuda() * resolution).view(-1, 65)        # shape (2500, sample_num)
             camera_rays = torch.cat((render_pose[:, -1].expand(50, 50, -1), ray_raw[(50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1))]), dim = -1).reshape(-1, 6)        # shape (2500, 6)
-            pts = render_pose[:, -1].unsqueeze(0) + sampled_lengths[..., None] * camera_rays[:, None, 3:]
-
-            density = prop_net.forward(pts)
-            prop_weights_raw = ProposalNetwork.get_weights(density, sampled_lengths, camera_rays[:, 3:])      # (ray_num, num of proposal interval)
+            
+            ipe_pts, mu_pts, mu_ts = ipe_feature(sampled_lengths, camera_rays, 10, pixel_width)
+            density = prop_net.forward(mu_pts, ipe_pts)
+            prop_weights_raw = ProposalNetwork.get_weights(density, mu_ts, camera_rays[:, 3:])      # (ray_num, num of proposal interval)
             prop_weights = maxBlurFilter(prop_weights_raw, 0.01)
 
-            fine_lengths, _, _ = inverseSample(prop_weights, sampled_lengths, sample_num + 1, sort = True)
-            fine_lengths = fine_lengths[..., :-1]
-            fine_samples = NeRF.length2pts(camera_rays, fine_lengths)
+            fine_lengths, _, _ = inverseSample(prop_weights, mu_ts, sample_num + 1, sort = True)
 
-            samples = torch.cat((fine_samples, camera_rays.unsqueeze(-2).repeat(1, sample_num, 1)), dim = -1)
+            ipe_pts, mu_pts, mu_ts = ipe_feature(fine_lengths, camera_rays, 10, pixel_width)
+            samples = torch.cat((mu_pts, camera_rays.unsqueeze(-2).repeat(1, sample_num, 1)), dim = -1)
             output_rgbo = network.forward(samples)
 
-            part_image, _ = NeRF.render(
-                output_rgbo, fine_lengths, camera_rays[..., 3:]
+            part_image, _, _, _ = NeRF.render(
+                output_rgbo, mu_ts, camera_rays[..., 3:]
             )          # originally outputs (2500, 3) -> (reshape) (50, 50, 3) -> (to image) (3, 50, 50)
             resulting_image[:, (50 * k):(50 * (k + 1)), (50 * j):(50 * (j + 1))] = part_image.view(50, 50, 3).permute(2, 0, 1)
     return resulting_image
@@ -118,11 +141,15 @@ def main():
     ep_start            = args.ep_start
     if use_amp:
         from apex import amp
+        opt_level = 'O1'
 
     if not torch.cuda.is_available():
         print("CUDA not available.")
         exit(-1)
     
+    fun_entropy_loss = EntropyLoss(args)
+    # fun_KL_divergence_loss = SmoothingLoss(args)
+
     # ======= instantiate model =====
     # NOTE: model is recommended to have loadFromFile method
     mip_net = NeRF(10, 4, hidden_unit = 256).cuda()
@@ -176,17 +203,30 @@ def main():
     for ep in range(ep_start, epochs):
         epoch_timer.tic()
         
-        for i, (train_img, train_tf) in enumerate(train_loader):
+        for i, (train_img, train_tf, ext_img, ext_tf) in enumerate(train_loader):
             train_timer.tic()
             train_img = train_img.cuda().squeeze(0)
             train_tf = train_tf.cuda().squeeze(0)
+            ext_img = ext_img.cuda().squeeze(0)
+            ext_tf = ext_tf.cuda().squeeze(0)
             now_crop = (center_crop if train_cnt < center_crop_iter else 1.)
             valid_pixels, valid_coords = randomFromOneImage(train_img, now_crop)
+            ext_valid_pixels, ext_valid_coords = randomFromOneImage(ext_img, now_crop)
 
             # sample one more t to form (coarse_sample_pnum) proposal interval
             coarse_samples, coarse_lengths, rgb_targets, coarse_cam_rays = validSampler(
                 valid_pixels, valid_coords, train_tf, sample_ray_num, coarse_sample_pnum, 400, 400, train_focal, near_t, far_t, True
             )
+            ext_coarse_lengths, ext_rgb_targets, ext_coarse_cam_rays = validSampler(
+                ext_valid_pixels, ext_valid_coords, ext_tf, args.N_entropy, coarse_sample_pnum + 1, 400, 400, train_focal, near_t, far_t, False
+            )
+            coarse_lengths = torch.cat([coarse_lengths, ext_coarse_lengths], 0)
+            rgb_targets = torch.cat([rgb_targets, ext_rgb_targets], 0)
+            coarse_cam_rays = torch.cat([coarse_cam_rays, ext_coarse_cam_rays], 0)
+
+            ipe_pts, mu_pts, mu_ts = ipe_feature(coarse_lengths, coarse_cam_rays, 10, pixel_width)
+            density = prop_net.forward(mu_pts, ipe_pts)
+            prop_weights_raw = ProposalNetwork.get_weights(density, mu_ts, coarse_cam_rays[:, 3:])      # (ray_num, num of proposal interval)
 
             density = prop_net.forward(coarse_samples[..., :3])
             prop_weights_raw = ProposalNetwork.get_weights(density, coarse_lengths, coarse_cam_rays[:, 3:])      # (ray_num, num of proposal interval)
@@ -198,10 +238,17 @@ def main():
 
             samples = torch.cat((fine_samples, coarse_cam_rays.unsqueeze(-2).repeat(1, fine_sample_pnum, 1)), dim = -1)
             fine_rgbo = mip_net.forward(samples)
-            fine_rendered, weights = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])
-            weight_bounds:torch.Tensor = getBounds(prop_weights, below_idxs, sort_inds)             # output shape: (ray_num, num of conical frustum)
-            prop_loss:torch.Tensor = prop_loss_func(weight_bounds, weights.detach())                # stop the gradient of NeRF MLP 
-            loss:torch.Tensor = prop_loss + loss_func(fine_rendered, rgb_targets) # + 0.01 * reg_loss_func(weights, fine_lengths)
+
+            # smoothing_lambda = args.smoothing_lambda * args.smoothing_rate ** (int(i/args.smoothing_step_size))
+            fine_rendered, alpha, weights, acc = NeRF.render(fine_rgbo, mu_ts, coarse_cam_rays[:, 3:])
+            entropy_ray_zvals_loss = fun_entropy_loss.ray_zvals(alpha, acc)
+            # smoothing_loss = fun_KL_divergence_loss(alpha)
+            # (mu_ts and weights) (coarse_length & prop_weights should be visualized)
+            weight_bounds:torch.Tensor = getBounds(prop_weights, below_idxs, sort_inds)     # output shape: (ray_num, num of conical frustum)
+            prop_loss:torch.Tensor = prop_loss_func(weight_bounds, weights.detach())             # stop the gradient of NeRF MLP 
+            loss:torch.Tensor = prop_loss + loss_func(fine_rendered, rgb_targets) + 0.001 * entropy_ray_zvals_loss
+                # + smoothing_lambda * smoothing_loss
+                # + 0.01 * reg_loss_func(weights, mu_ts, fine_lengths)
 
             train_timer.toc()
             if use_amp:
@@ -223,7 +270,8 @@ def main():
                 sch.step()
             train_cnt += 1
 
-        if (ep % 50 == 0) or ep == epochs - 1:
+        # model.eval()
+        if (ep % 100 == 0) or ep == epochs - 1:
             mip_net.eval()
             with torch.no_grad():
                 eval_timer.tic()
@@ -270,12 +318,12 @@ def main():
 
 def render_only():
     use_amp             = args.use_scaler
-    load_path_mip       = default_model_path + args.name + "_mip.pt"
-    load_path_prop      = default_model_path + args.name + "_prop.pt"
+    load_path_mip       = default_chkpt_path + args.name + "_mip.pt"
+    load_path_prop      = default_chkpt_path + args.name + "_prop.pt"
     near_t              = args.near
     far_t               = args.far
     dataset_name        = args.dataset_name
-    testset = CustomDataSet("../dataset/nerf_synthetic/%s/"%(dataset_name), transform_funcs, False, use_alpha = False)
+    testset = CustomDataSet("../../instant-ngp/data/nerf/nerf_synthetic/%s/"%(dataset_name), transform_funcs, False, use_alpha = False)
 
     cam_fov_test, _ = testset.getCameraParam()
     test_focal = fov2Focal(cam_fov_test, 400)
@@ -287,8 +335,8 @@ def render_only():
         from apex import amp
         [mip_net, prop_net] = amp.initialize([mip_net, prop_net], None, opt_level=OPT_LEVEL)
     mip_net.loadFromFile(load_path_mip, use_amp)
+    prop_net = ProposalNetwork(10).cuda()
     prop_net.loadFromFile(load_path_prop, use_amp)
-
     all_poses = torch.stack([pose_spherical(angle, -30.0, 4.0) for angle in torch.linspace(-180,180,80+1)[:-1]], 0).cuda()
     mip_net.eval()
     with torch.no_grad():
