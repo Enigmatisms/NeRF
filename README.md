@@ -11,6 +11,7 @@ My reproduction results:
 #### 4.25 Update
 
 To boost the resulting quality, two more approaches are incorporated in this repo:
+
 The idea from [ICCV 2021: Mip-NeRF: A Multiscale Representation for Anti-Aliasing Neural Radiance Fields](https://jonbarron.info/mipnerf/), using conical frustum instead of pure points in sampling, trying to solve the problem of aliasing under multi-resolution settings. Removed the use of coarse network.
 
 The idea from [CVPR 2022: Mip-NeRF 360: Unbounded Anti-Aliased Neural Radiance Fields](https://paperswithcode.com/paper/mip-nerf-360-unbounded-anti-aliased-neural/review/), which currently has no open-sourced code:

@@ -23,19 +23,19 @@ class NeRF(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def __init__(self, position_flevel, direction_flevel, cat_origin = True) -> None:
+    def __init__(self, position_flevel, direction_flevel, hidden_unit = 512, cat_origin = True) -> None:
         super().__init__()
         self.position_flevel = position_flevel
         self.direction_flevel = direction_flevel
         extra_width = 3 if cat_origin else 0
-        module_list = makeMLP(60 + extra_width, 256)
+        module_list = makeMLP(60 + extra_width, hidden_unit)
         for _ in range(3):
-            module_list.extend(makeMLP(256, 256))
+            module_list.extend(makeMLP(hidden_unit, hidden_unit))
 
         self.lin_block1 = nn.Sequential(*module_list)       # MLP before skip connection
         self.lin_block2 = nn.Sequential(
-            *makeMLP(316 + extra_width, 256),
-            *makeMLP(256, 256), *makeMLP(256, 256)
+            *makeMLP(hidden_unit + 60 + extra_width, hidden_unit),
+            *makeMLP(hidden_unit, hidden_unit), *makeMLP(hidden_unit, 256)
         )
 
 
@@ -89,6 +89,12 @@ class NeRF(nn.Module):
         encoded_x = self.bottle_neck(encoded_x)
         rgb = self.rgb_layer(torch.cat((encoded_x, encoded_r), dim = -1))
         return torch.cat((rgb, opacity), dim = -1)      # output (ray_num, point_num, 4)
+
+    @staticmethod
+    def length2pts(rays:torch.Tensor, f_zvals:torch.Tensor) -> torch.Tensor:
+        sample_pnum = f_zvals.shape[1]
+        pts = rays[...,None,:3] + rays[...,None,3:] * f_zvals[...,:,None] 
+        return torch.cat((pts, rays[:, 3:].unsqueeze(-2).repeat(1, sample_pnum, 1)), dim = -1)                 # output is (ray_num, coarse_pts num + fine pts num, 6)
 
     # rays is of shape (ray_num, 6)
     @staticmethod

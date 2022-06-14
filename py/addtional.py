@@ -9,8 +9,7 @@ import torch
 from apex import amp
 from torch import nn
 from torch.nn import functional as F
-from py.nerf_helper import makeMLP
-
+from py.nerf_helper import makeMLP, positional_encoding
 
 # according to calculated weights (of proposal net) and indices of inverse sampling, calculate the bounds required for loss computation
 # input weights (from proposal net) shape: (ray_num, num of proposal interval), inds shape (ray_num, fine_sample num + 1? TODO, 2)
@@ -31,12 +30,14 @@ class ProposalLoss(nn.Module):
 class Regularizer(nn.Module):
     def __init__(self) -> None: super().__init__()
     # inputs are of the same shape (ray_num, num of cones)
-    def forward(self, weights:torch.Tensor, mu_ts:torch.Tensor, fine_ts:torch.Tensor):
-        dists = torch.abs(mu_ts[:, None, :] - mu_ts[..., None])
+    def forward(self, weights:torch.Tensor, fine_ts:torch.Tensor):
+        center = (fine_ts[..., :-1] + fine_ts[..., 1:]) / 2.
+        dists = torch.abs(center[:, None, :] - center[..., None])
         dists = dists / dists.norm(dim = -1, keepdim = True)
-        mult_ws =  weights[:, None, :] * weights[..., None]
+        avg_weights = (weights[..., :-1] + weights[..., 1:]) / 2.
+        mult_ws =  avg_weights[:, None, :] * avg_weights[..., None]
         delta = fine_ts[..., 1:] - fine_ts[..., :-1]
-        return torch.mean(mult_ws * dists) + torch.mean(delta * (weights ** 2)) / 3.
+        return torch.mean(mult_ws * dists) + torch.mean(delta * (avg_weights ** 2)) / 3.
 
 class SoftL1Loss(nn.Module):
     def __init__(self, epsilon = 0.001) -> None: 
@@ -53,15 +54,15 @@ class ProposalNetwork(nn.Module):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
-    def __init__(self, position_flevel, cat_origin = True) -> None:
+    def __init__(self, position_flevel, hidden_unit = 128, cat_origin = True) -> None:
         super().__init__()
         self.position_dims = position_flevel * 6
         self.cat_origin = cat_origin
         extra_dims = 3 if cat_origin else 0
         self.layers = nn.Sequential(
-            *makeMLP(self.position_dims + extra_dims, 256),
-            *makeMLP(256, 256), *makeMLP(256, 256), *makeMLP(256, 256),
-            *makeMLP(256, 1, nn.Softplus())
+            *makeMLP(self.position_dims + extra_dims, hidden_unit),
+            *makeMLP(hidden_unit, hidden_unit), *makeMLP(hidden_unit, hidden_unit), *makeMLP(hidden_unit, hidden_unit),
+            *makeMLP(hidden_unit, 1, nn.Softplus())
         )
         self.apply(self.init_weight)
 
@@ -78,8 +79,11 @@ class ProposalNetwork(nn.Module):
             amp.load_state_dict(save['amp'])
         print("NeRF Model loaded from '%s'"%(load_path))
 
-    def forward(self, pts:torch.Tensor, encoded_pt:torch.Tensor) -> torch.Tensor:
-        encoded_x = encoded_pt.view(pts.shape[0], pts.shape[1], self.position_dims)
+    def forward(self, pts:torch.Tensor, encoded_pt:torch.Tensor = None) -> torch.Tensor:
+        if not encoded_pt is None:
+            encoded_x = encoded_pt.view(pts.shape[0], pts.shape[1], self.position_dims)
+        else:
+            encoded_x = positional_encoding(pts, 10)
         if self.cat_origin:
             encoded_x = torch.cat((pts, encoded_x), -1)
         # output shape (ray_num, coarse_sample_num, 1) --> (ray_num, coarse_sample_num)
