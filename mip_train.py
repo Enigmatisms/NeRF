@@ -154,8 +154,7 @@ def main():
     # 数据集加载
     trainset = CustomDataSet("../dataset/nerf_synthetic/%s/"%(dataset_name), transform_funcs, True, use_alpha = False)
     testset = CustomDataSet("../dataset/nerf_synthetic/%s/"%(dataset_name), transform_funcs, False, use_alpha = False)
-    cam_fov_train, train_cam_tf = testset.getCameraParam()
-    train_cam_tf = train_cam_tf[0].cuda()
+    cam_fov_train, _ = testset.getCameraParam()
 
     train_loader = DataLoader(trainset, 1, shuffle = True, num_workers = 4)
     cam_fov_test, tmp = testset.getCameraParam()
