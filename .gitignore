@@ -9,3 +9,5 @@
 **/*.pt
 logs/*
 output/*
+
+*.png
