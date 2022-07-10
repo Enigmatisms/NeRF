@@ -7,10 +7,10 @@
 import os
 import torch
 import shutil
-from datetime import datetime
 import numpy as np
+from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
-from scipy.spatial.transform import Rotation as R
+from collections.abc import Iterable
 
 def getSummaryWriter(epochs:int, del_dir:bool):
     logdir = './logs/'
@@ -36,60 +36,72 @@ def inverseSample(weights:torch.Tensor, coarse_depth:torch.Tensor, sample_pnum:i
         weights = weights.detach()
     # cdf = torch.cumsum(weights, dim = -1)
     z_vals_mid = .5 * (coarse_depth[...,1:] + coarse_depth[...,:-1])
-    z_samples, idxs = sample_pdf(z_vals_mid, weights[...,1:-1], sample_pnum)
+    z_samples, idxs, _ = sample_pdf(z_vals_mid, weights[...,1:-1], sample_pnum)
     # idxs is the lower and upper indices of inverse sampling intervals, which is of shape (ray_num, sample_num, 2)
-    # TODO: 此处需要sort
     if sort:
         z_samples, sort_inds = torch.sort(z_samples, dim = -1)
-        return z_samples, sort_inds, idxs          # depth is used for rendering
+        idx_below = torch.gather(idxs, -1, sort_inds)
+        return z_samples, idx_below          # depth is used for rendering
     return z_samples
 
 # input (all training images, center_crop ratio)
-def randomFromOneImage(img:torch.Tensor, center_crop:float):
+def randomFromOneImage(img:torch.Tensor, crop_xy:tuple):
     target_device = img.device
     if img.dim() > 3:
         img = img.squeeze(0)
     half_w = img.shape[2] // 2
     half_h = img.shape[1] // 2
-    if center_crop < 9.9e-1:
-        x_lb, x_ub = int(half_w * (1. - center_crop)), int(half_w + half_w * center_crop)
-        y_lb, y_ub = int(half_h * (1. - center_crop)), int(half_h + half_h * center_crop)
+    if crop_xy[0] < 9.9e-1:
+        x_lb, x_ub = int(half_w * (1. - crop_xy[0])), int(half_w + half_w * crop_xy[0])
     else:
-        x_lb = y_lb = 0
-        x_ub, y_ub = img.shape[2], img.shape[1]
-    row_ids, col_ids = torch.meshgrid(torch.arange(x_lb, x_ub), torch.arange(y_lb, y_ub), indexing = 'ij')
+        x_lb = 0
+        x_ub = img.shape[2]
+    if crop_xy[1] < 9.9e-1:
+        y_lb, y_ub = int(half_h * (1. - crop_xy[1])), int(half_h + half_h * crop_xy[1])
+    else:
+        y_lb = 0
+        y_ub = img.shape[1]
+    row_ids, col_ids = torch.meshgrid(torch.arange(y_lb, y_ub), torch.arange(x_lb, x_ub), indexing = 'ij')
     coords = torch.stack((col_ids - half_w, half_h - row_ids), dim = -1).to(target_device)
     # returned values are flattened
-    if center_crop < 9.9e-1:
+    if crop_xy[0] < 9.9e-1 or crop_xy[1] < 9.9e-1:
         return img[:, row_ids, col_ids].view(3, -1).transpose(0, 1).contiguous(), coords.view(-1, 2)
     else:
         return img.view(3, -1).transpose(0, 1).contiguous(), coords.view(-1, 2)
 
 # new valid sampler returns sampled points, sampled length, rgb gt value and camera ray origin and direction
-def validSampler(rgbs:torch.Tensor, coords:torch.Tensor, cam_tf:torch.Tensor, ray_num:int, point_num:int, w:int, h:int, focal:float, near:float, far:float, output_samples = True):
+def validSampler(rgbs:torch.Tensor, coords:torch.Tensor, cam_tf:torch.Tensor, ray_num:int, point_num:int, focal, near:float, far:float, output_samples = True):
     target_device = rgbs.device
+
     max_id = coords.shape[0]
     indices = torch.randint(0, max_id, (ray_num,)).to(target_device)
     output_rgb = rgbs[indices]
-    sampled_coords = coords[indices]
-    resolution = (far - near) / point_num
-    all_lengths = torch.linspace(near, far - resolution, point_num).to(target_device)
-    lengths = all_lengths + torch.rand((ray_num, point_num)).to(target_device) * resolution
+    sampled_coords = coords[indices].to(torch.float32) + 0.5                    # shift half pixel
+    if isinstance(focal, Iterable):
+        sampled_coords[..., 0] /= focal[1]
+        sampled_coords[..., 1] /= focal[0]
+    else:
+        sampled_coords /= focal
     # sampled coords is (col_id, col_id)
+    ray_raw = torch.sum(torch.cat([sampled_coords, -torch.ones(sampled_coords.shape[0], 1, dtype = torch.float32).to(target_device)], dim = -1).unsqueeze(-2) * cam_tf[:, :-1], dim = -1)
     if output_samples:
-        ray_raw = torch.sum(torch.cat([sampled_coords / focal, -torch.ones(sampled_coords.shape[0], 1, dtype = torch.float32).to(target_device)], dim = -1).unsqueeze(-2) * cam_tf[:, :-1], dim = -1)
+        resolution = (far - near) / point_num
+        all_lengths = torch.linspace(near, far - resolution, point_num).to(target_device)
+        lengths = all_lengths + torch.rand((ray_num, point_num)).to(target_device) * resolution
         pts = cam_tf[:, -1] + ray_raw[:, None, :] * lengths[:, :, None]
         return torch.cat((pts, ray_raw.unsqueeze(-2).repeat(1, point_num, 1)), dim = -1), lengths, output_rgb, torch.cat((cam_tf[:, -1].unsqueeze(0).repeat(ray_raw.shape[0], 1), ray_raw), dim = -1)
-    ray_raw = torch.sum(torch.cat([(sampled_coords) / focal, -torch.ones(sampled_coords.shape[0], 1, dtype = torch.float32).to(target_device)], dim = -1).unsqueeze(-2) * cam_tf[:, :-1], dim = -1)
     # return shape (ray_num, point_num, 3), (ray_num, point_num), rgb(ray_num, rgb), cams(ray_num, ray_dir, ray_t)
-    return lengths, output_rgb, torch.cat((cam_tf[:, -1].unsqueeze(0).repeat(ray_raw.shape[0], 1), ray_raw), dim = -1)
-    # ray_raw is of shape (ray_num, 3)
+    return output_rgb, torch.cat((cam_tf[:, -1].unsqueeze(0).repeat(ray_raw.shape[0], 1), ray_raw), dim = -1)
 
-def fov2Focal(fov:float, img_width:float) -> float:
-    return .5 * img_width / np.tan(.5 * fov)
-
-def getRadius(focal:float):
-    return 1 / focal * 2 / np.sqrt(12.)
+def fov2Focal(fov, img_size):
+    if isinstance(fov, Iterable):
+        if not isinstance(img_size, Iterable):
+            raise ValueError("Error: If fov is iterable, img size should be iterable too, while we have typeof(img_size) =", type(img_size))
+        # CAUTION: fov[0] is camera_angle_x (col-wise), which corresponds to img_size[1] (column number). For fov[1], similarly
+        return (0.5 * img_size[0] / np.tan(.5 * fov[1]), 0.5 * img_size[1] / np.tan(.5 * fov[0]))
+    if img_size[0] == img_size[1]:
+        img_size = img_size[0]
+    return img_size / np.tan(.5 * fov)
 
 # From official implementation, since using APEX will change the dtype of inputs, plain CUDA (with no template) won't work
 def sample_pdf(bins, weights, N_samples):
@@ -102,15 +114,12 @@ def sample_pdf(bins, weights, N_samples):
     u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
 
     # Invert CDF
-    # 这里的处理还是有点问题，需要sort
     u = u.cuda().contiguous()
     inds = torch.searchsorted(cdf, u, right=True)
     below = torch.max(torch.zeros_like(inds-1), inds-1).cuda()
     above = torch.min((cdf.shape[-1]-1) * torch.ones_like(inds).cuda(), inds)
     inds_g = torch.stack([below, above], -1)  # (batch, N_samples, 2)
 
-    # cdf_g = tf.gather(cdf, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
-    # bins_g = tf.gather(bins, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
     matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]
     cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
     bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)
@@ -120,7 +129,7 @@ def sample_pdf(bins, weights, N_samples):
     t = (u-cdf_g[...,0])/denom
     samples = bins_g[...,0] + t * (bins_g[...,1]-bins_g[...,0])
 
-    return samples, below
+    return samples, below, above
 
 # functions from nerf-pytorch
 trans_t = lambda t : torch.Tensor([

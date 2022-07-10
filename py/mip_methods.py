@@ -6,13 +6,6 @@
     @date 2022.4.22 @copyright
 """
 
-""" 
-TODO
-(1) conical frustum 的各个参数计算，如何使用torch实现？（利用好张量计算的并行性），应该比较简单
-(2) 公式（9）（14）的实现
-"""
-
-from pyrsistent import b
 import torch
 from torch.nn import functional as F
 

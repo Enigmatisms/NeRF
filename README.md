@@ -2,7 +2,14 @@
 
 ---
 
+#### 7.10 update
+
+Better code structure for running and debugging. The original NeRF (in previous versions, the executable of which is named `train.py`) is no longer supported. Instead, NeRF with mip 360 (proposal network) and auto-mixed precision is currently maintained. The current version is not yet run (lack of available GPU device), but will be tested soon.
+
+---
+
 My reproduction results:
+
 |   Lego trained for 2.5h    |          Hotdog trained for 30min          |
 | :------------------------------: | :---------------------------------------------------: |
 | ![ezgif-4-fe2ea0a6a2](https://user-images.githubusercontent.com/46109954/173533863-499b04bf-4242-41a5-98d4-6fc81ee412b3.gif) | ![ezgif-4-402a3412da](https://user-images.githubusercontent.com/46109954/173536624-beb64cb6-e151-4267-94c9-183793951011.gif) |

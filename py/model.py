@@ -7,7 +7,6 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from apex import amp
 from py.nerf_helper import makeMLP, positional_encoding
 # import tinycudann as tcnn
 
@@ -23,7 +22,7 @@ class NeRF(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def __init__(self, position_flevel, direction_flevel, hidden_unit = 512, cat_origin = True) -> None:
+    def __init__(self, position_flevel, direction_flevel, hidden_unit = 256, cat_origin = True) -> None:
         super().__init__()
         self.position_flevel = position_flevel
         self.direction_flevel = direction_flevel
@@ -42,7 +41,7 @@ class NeRF(nn.Module):
         self.bottle_neck = nn.Sequential(*makeMLP(256, 256, None))
 
         self.opacity_head = nn.Sequential(                  # authors said that ReLU is used here
-            *makeMLP(256, 1)
+            *makeMLP(256, 1, None)
         )
         self.rgb_layer = nn.Sequential(
             *makeMLP(280 + extra_width, 128),
@@ -51,21 +50,24 @@ class NeRF(nn.Module):
         self.cat_origin = cat_origin
         self.apply(self.init_weight)
 
-    def loadFromFile(self, load_path:str, use_amp = False, opt = None):
+    def loadFromFile(self, load_path:str, use_amp = False, opt = None, other_stuff = None):
         save = torch.load(load_path)   
         save_model = save['model']                  
+        state_dict = {k:save_model[k] for k in self.state_dict().keys()}
         model_dict = self.state_dict()
-        state_dict = {k:v for k, v in save_model.items()}
         model_dict.update(state_dict)
         self.load_state_dict(model_dict)
         if not opt is None:
             opt.load_state_dict(save['optimizer'])
         if use_amp:
+            from apex import amp
             amp.load_state_dict(save['amp'])
         print("NeRF Model loaded from '%s'"%(load_path))
+        if not other_stuff is None:
+            return [save[k] for k in other_stuff]
+
 
     # for coarse network, input is obtained by sampling, sampling result is (ray_num, point_num, 9), (depth) (ray_num, point_num)
-    # TODO: fine-network输入的point_num是192，会产生影响吗？
     def forward(self, pts:torch.Tensor, encoded_pt:torch.Tensor = None) -> torch.Tensor:
         position_dim, direction_dim = 6 * self.position_flevel, 6 * self.direction_flevel
         if not encoded_pt is None:
@@ -124,13 +126,31 @@ class NeRF(nn.Module):
     # depth shape: (ray_num, point_num)
     # need the norm of rays, shape: (ray_num, point_num)
     @staticmethod
-    def render(rgbo:torch.Tensor, depth:torch.Tensor, ray_dirs:torch.Tensor) -> torch.Tensor:
-        depth = depth * (ray_dirs.norm(dim = -1, keepdim = True))
+    def render(rgbo:torch.Tensor, depth:torch.Tensor, ray_dirs:torch.Tensor, mul_norm:bool = True, white_bkg:bool = False) -> torch.Tensor:
+        if mul_norm == True:
+            depth = depth * (ray_dirs.norm(dim = -1, keepdim = True))
         rgb:torch.Tensor = rgbo[..., :3] # shape (ray_num, pnum, 3)
         opacity:torch.Tensor = rgbo[..., -1]             # 1e-5 is used for eliminating numerical instability
         weights = NeRF.getNormedWeight(opacity, depth)
-        weighted_rgb:torch.Tensor = weights[:, :, None] * rgb
-        return torch.sum(weighted_rgb, dim = -2), weights     # output (ray_num, 3) and (ray_num, point_num)
+        rgb:torch.Tensor = torch.sum(weights[:, :, None] * rgb, dim = -2)
+        if white_bkg:
+            acc_map = torch.sum(weights, -1)
+            rgb = rgb + (1.-acc_map[...,None])
+        return rgb, weights     # output (ray_num, 3) and (ray_num, point_num)
+
+class DecayLrScheduler:
+    def __init__(self, min_r, decay_r, step, lr):
+        self.min_ratio = min_r
+        self.decay_rate = decay_r
+        self.decay_step = step
+        self.lr = lr
+
+    def update_opt_lr(self, train_cnt, opt: torch.optim.Optimizer = None):
+        new_lrate = self.lr * max((self.decay_rate ** (train_cnt / self.decay_step)), self.min_ratio)
+        if opt is not None:
+            for param_group in opt.param_groups:
+                param_group['lr'] = new_lrate
+        return opt, new_lrate
 
 if __name__ == "__main__":
     print("Hello NeRF world!")

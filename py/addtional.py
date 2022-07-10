@@ -4,9 +4,7 @@
     Implementation related with mip NeRF 360
 """
 
-from turtle import forward
 import torch
-from apex import amp
 from torch import nn
 from torch.nn import functional as F
 from py.nerf_helper import makeMLP, positional_encoding
@@ -14,9 +12,8 @@ from py.nerf_helper import makeMLP, positional_encoding
 # according to calculated weights (of proposal net) and indices of inverse sampling, calculate the bounds required for loss computation
 # input weights (from proposal net) shape: (ray_num, num of proposal interval), inds shape (ray_num, fine_sample num + 1? TODO, 2)
 # 输入的inds应该是sample_pdf中的 below，每个点将有两个值。考虑到sample_pdf得到的点数量为(cone_num + 1)
-def getBounds(weights:torch.Tensor, inds:torch.Tensor, sort_inds:torch.Tensor):
+def getBounds(weights:torch.Tensor, inds:torch.Tensor):
     ray_num, target_device = weights.shape[0], weights.device
-    inds = torch.gather(inds, -1, sort_inds)
     starts, ends = inds[:, :-1], inds[:, 1:] + 1
     sat:torch.Tensor = torch.cat((torch.zeros(ray_num, 1, device = target_device), torch.cumsum(weights, dim = -1)), dim = -1)                  # 输入的 weights是什么？proposal net 的weights
     return torch.gather(sat, -1, ends) - torch.gather(sat, -1, starts)
@@ -46,6 +43,15 @@ class SoftL1Loss(nn.Module):
     def forward(self, pred:torch.Tensor, target:torch.Tensor):
         return torch.mean(torch.sqrt(self.eps ** 2 + (pred - target) ** 2))
 
+class LossPSNR(nn.Module):
+    __LOG_10__ = 2.3025851249694824
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, x):
+        return -10. * torch.log(x) / LossPSNR.__LOG_10__
+
+
 class ProposalNetwork(nn.Module):
     @staticmethod
     def init_weight(m):
@@ -66,18 +72,19 @@ class ProposalNetwork(nn.Module):
         )
         self.apply(self.init_weight)
 
-    def loadFromFile(self, load_path:str, use_amp = False, opt = None):
+    def loadFromFile(self, load_path:str, use_amp = False, other_stuff = None):
         save = torch.load(load_path)   
         save_model = save['model']                  
+        state_dict = {k:save_model[k] for k in self.state_dict().keys()}
         model_dict = self.state_dict()
-        state_dict = {k:v for k, v in save_model.items()}
         model_dict.update(state_dict)
         self.load_state_dict(model_dict)
-        if not opt is None:
-            opt.load_state_dict(save['optimizer'])
         if use_amp:
+            from apex import amp
             amp.load_state_dict(save['amp'])
         print("NeRF Model loaded from '%s'"%(load_path))
+        if not other_stuff is None:
+            return [save[k] for k in other_stuff]
 
     def forward(self, pts:torch.Tensor, encoded_pt:torch.Tensor = None) -> torch.Tensor:
         if not encoded_pt is None:
@@ -89,14 +96,24 @@ class ProposalNetwork(nn.Module):
         # output shape (ray_num, coarse_sample_num, 1) --> (ray_num, coarse_sample_num)
         return self.layers(encoded_x).squeeze(-1)
 
+    # zvals from refractive sampler are already weighed by ray_dir norms
     @staticmethod
-    def get_weights(density:torch.Tensor, zvals:torch.Tensor, ray_dirs:torch.Tensor) -> torch.Tensor:
-        zvals = zvals * (ray_dirs.norm(dim = -1, keepdim = True))
+    def get_weights(density:torch.Tensor, zvals:torch.Tensor, ray_dirs:torch.Tensor = None) -> torch.Tensor:
+        if not ray_dirs is None:
+            zvals = zvals * (ray_dirs.norm(dim = -1, keepdim = True))
         delta:torch.Tensor = torch.cat((zvals[:, 1:] - zvals[:, :-1], torch.FloatTensor([1e10]).repeat((zvals.shape[0], 1)).cuda()), dim = -1)
         mult:torch.Tensor = torch.exp(-F.relu(density) * delta)
         alpha:torch.Tensor = 1. - mult
         weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).cuda(), mult + 1e-10], -1), -1)[:, :-1]
         return weights     # output (ray_num, num of coarse sample (proposal interval number))
+
+    @staticmethod
+    def coarseFineMerge(coarse_pts:torch.Tensor, fine_pts:torch.Tensor, c_zvals:torch.Tensor, f_zvals:torch.Tensor):
+        all_pts = torch.cat((fine_pts, coarse_pts), dim = -2)
+        all_zvals = torch.cat((f_zvals, c_zvals), dim = -1)
+        all_zvals, sort_inds = torch.sort(all_zvals, dim = -1)
+        sorted_pts = torch.gather(all_pts, -2, sort_inds.unsqueeze(-1).expand(-1, -1, 6))
+        return sorted_pts, all_zvals, sort_inds
 
 if __name__ == "__main__":
     print("Hello NeRF world!")

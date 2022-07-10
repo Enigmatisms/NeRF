@@ -4,12 +4,14 @@
 """
 import torch
 
-def saveModel(model, path:str, opt = None, amp = None):
+def saveModel(model, path:str, other_stuff: dict = None, opt = None, amp = None):
     checkpoint = {'model': model.state_dict(),}
     if not amp is None:
         checkpoint['amp'] =  amp.state_dict()
     if not opt is None:
         checkpoint['optimizer'] = opt.state_dict()
+    if not other_stuff is None:
+        checkpoint.update(other_stuff)
     torch.save(checkpoint, path)
     
 def makeMLP(in_chan, out_chan, act = torch.nn.ReLU(), batch_norm = False):
@@ -35,11 +37,12 @@ def nan_hook(self, inp, output):
 
 def positional_encoding(x:torch.Tensor, freq_level:int) -> torch.Tensor:
     result = []
-    ray_num, point_num = x.shape[0], x.shape[1]
     for fid in range(freq_level):
         freq = 2. ** fid
         for func in (torch.sin, torch.cos):
-            result.append(func(freq * x.unsqueeze(-2)))
-    encoded = torch.cat(result, dim = -2).view(ray_num, point_num, -1)
+            result.append(func(freq * x))
+    encoded = torch.cat(result, dim = -1)
+    if x.dim() > 2:
+        ray_num, point_num = x.shape[0], x.shape[1]
+        encoded = encoded.view(ray_num, point_num, -1)
     return encoded
-    
