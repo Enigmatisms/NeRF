@@ -16,7 +16,7 @@ def getBounds(weights:torch.Tensor, inds:torch.Tensor, sort_inds:torch.Tensor):
     ray_num, target_device = weights.shape[0], weights.device
     inds = torch.gather(inds, -1, sort_inds)
     starts, ends = inds[:, :-1], inds[:, 1:] + 1
-    sat:torch.Tensor = torch.cat((torch.zeros(ray_num, 1, device = target_device), torch.cumsum(weights, dim = -1)), dim = -1)                  # 输入的 weights是什么？proposal net 的weights
+    sat:torch.Tensor = torch.cat((torch.zeros(ray_num, 1, device = target_device), torch.cumsum(weights, dim = -1)), dim = -1)                  # proposal net 的weights
     return torch.gather(sat, -1, ends) - torch.gather(sat, -1, starts)
 
 class ProposalLoss(nn.Module):
@@ -51,7 +51,6 @@ class LossPSNR(nn.Module):
 
     def forward(self, x):
         return -10. * torch.log(x) / LossPSNR.__LOG_10__
-
 
 class ProposalNetwork(nn.Module):
     @staticmethod
