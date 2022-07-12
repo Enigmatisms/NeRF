@@ -2,13 +2,17 @@
 
 ---
 
-#### 7.10 update
+#### 7.12 update
 
-Better code structure for running and debugging. The original NeRF (in previous versions, the executable of which is named `train.py`) is no longer supported. Instead, NeRF with mip 360 (proposal network) and auto-mixed precision is currently maintained. The current version is not yet run (lack of available GPU device), but will be tested soon.
+Better code structure for running and debugging. The original NeRF (in previous versions, the executable of which is named `train.py`) is no longer supported. Instead, NeRF with mip 360 (proposal network) and auto-mixed precision is currently maintained. Run the following code to find out:
+```shell
+python ./train.py -w -s --opt_level O1 --dataset_name ship
+```
+`-w` indicates white background. `-s` and `--opt_level` set up amp env.
 
 ---
 
-My reproduction results:
+Reproduction results:
 
 |   Lego trained for 2.5h    |          Hotdog trained for 30min          |
 | :------------------------------: | :---------------------------------------------------: |
