@@ -48,7 +48,6 @@ def main(args):
     use_white_bkg       = args.white_bkg
     opt_mode            = args.opt_mode        
     train_cnt, ep_start = None, None
-    reg_loss_weight     = 0.0
 
     if use_amp:
         from apex import amp
