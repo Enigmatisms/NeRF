@@ -55,7 +55,7 @@ def render_image(
             density = prop_net.forward(pts)
             prop_weights_raw = ProposalNetwork.get_weights(density, sampled_lengths, camera_rays[:, 3:])      # (ray_num, num of proposal interval)
             prop_weights = maxBlurFilter(prop_weights_raw, 0.01)
-            fine_lengths, _ = inverseSample(prop_weights, sampled_lengths, sample_num + 1, sort = True)
+            fine_lengths, _, _ = inverseSample(prop_weights, sampled_lengths, sample_num + 1, sort = True)
             fine_lengths = fine_lengths[..., :-1]
             fine_samples = NeRF.length2pts(camera_rays, fine_lengths)
             samples = torch.cat((fine_samples, camera_rays.unsqueeze(-2).repeat(1, sample_num, 1)), dim = -1)
@@ -116,7 +116,7 @@ def get_parser():
     parser.add_argument("--coarse_sample_pnum", type = int, default = 64, help = "Points to sample in coarse net")
     parser.add_argument("--fine_sample_pnum", type = int, default = 128, help = "Points to sample in fine net")
     parser.add_argument("--eval_time", type = int, default = 5, help = "Tensorboard output interval (train time)")
-    parser.add_argument("--output_time", type = int, default = 50, help = "Image output interval (train time)")
+    parser.add_argument("--output_time", type = int, default = 20, help = "Image output interval (train time)")
     parser.add_argument("--center_crop_iter", type = int, default = 500, help = "Produce center")
     parser.add_argument("--near", type = float, default = 2., help = "Nearest sample depth")
     parser.add_argument("--far", type = float, default = 6., help = "Farthest sample depth")
