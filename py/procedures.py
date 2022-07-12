@@ -71,7 +71,6 @@ def render_only(args, model_path: str, opt_level: str):
     use_amp             = args.use_scaler
     load_path_mip       = model_path + args.name + "_mip.pth"
     load_path_prop      = model_path + args.name + "_prop.pth"
-    load_path_ref       = model_path + args.name + "_ref.pth"
     near_t              = args.near
     far_t               = args.far
     dataset_name        = args.dataset_name
