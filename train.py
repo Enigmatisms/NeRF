@@ -48,7 +48,6 @@ def main(args):
     use_white_bkg       = args.white_bkg
     opt_mode            = args.opt_mode        
     train_cnt, ep_start = None, None
-    reg_loss_weight     = 0.0
 
     if use_amp:
         from apex import amp
@@ -132,7 +131,7 @@ def main(args):
 
             # sample one more t to form (coarse_sample_pnum) proposal interval
             coarse_samples, coarse_lengths, rgb_targets, coarse_cam_rays = validSampler(
-                valid_pixels, valid_coords, train_tf, sample_ray_num, coarse_sample_pnum, 400, 400, train_focal, near_t, far_t, True
+                valid_pixels, valid_coords, train_tf, sample_ray_num, coarse_sample_pnum, train_focal, near_t, far_t, True
             )
             # output 
             def run():
@@ -156,21 +155,21 @@ def main(args):
 
                 prop_loss:torch.Tensor = prop_loss_func(weight_bounds, weights.detach())                # stop the gradient of NeRF MLP 
                 loss:torch.Tensor = prop_loss + loss_func(fine_rendered, rgb_targets) # + 0.01 * reg_loss_func(weights, fine_lengths)
-                return loss, img_loss, ref_reg_loss
+                return loss, img_loss
             if use_amp:
                 if opt_mode == "native":
                     with autocast():
-                        loss, img_loss, ref_reg_loss = run()
+                        loss, img_loss = run()
                         scaler.scale(loss).backward()
                         scaler.step(opt)
                         scaler.update()
                 else:
-                    loss, img_loss, ref_reg_loss = run()
+                    loss, img_loss = run()
                     with amp.scale_loss(loss, opt) as scaled_loss:
                         scaled_loss.backward()
                     opt.step()
             else:
-                loss, img_loss, ref_reg_loss = run()
+                loss, img_loss = run()
                 loss.backward()
                 opt.step()
 
@@ -181,8 +180,8 @@ def main(args):
                 # ========= Evaluation output ========
                 remaining_cnt = (epochs - ep - 1) * train_set_len + train_set_len - i
                 psnr = mse2psnr(img_loss)
-                print("Traning Epoch: %4d / %4d\t Iter %4d / %4d\ttrain loss: %.4f\tPSNR: %.3lf\treg loss: %.5lf\treg weight: %.5lf\tlr:%.7lf\tcenter crop:%.1lf, %.1lf\tremaining train time:%s"%(
-                        ep, epochs, i, train_set_len, loss.item(), psnr, ref_reg_loss, reg_loss_weight, new_lr, now_crop[0], now_crop[1], train_timer.remaining_time(remaining_cnt)
+                print("Traning Epoch: %4d / %4d\t Iter %4d / %4d\ttrain loss: %.4f\tPSNR: %.3lf\tlr:%.7lf\tcenter crop:%.1lf, %.1lf\tremaining train time:%s"%(
+                        ep, epochs, i, train_set_len, loss.item(), psnr, new_lr, now_crop[0], now_crop[1], train_timer.remaining_time(remaining_cnt)
                 ))
                 writer.add_scalar('Train Loss', loss, train_cnt)
                 writer.add_scalar('Learning Rate', new_lr, train_cnt)
@@ -227,9 +226,7 @@ def main(args):
 if __name__ == "__main__":
     parser = get_parser()
 
-    parser.add_argument("--off_plane_w", type = float, default = 0.5, help = "Penalty for off-plane value")
     parser.add_argument("--pe_period_scale", type = float, default = 0.5, help = "Scale of positional encoding")
-    parser.add_argument("--ref_start_epoch", type = int, default = 2000, help = "The starting epoch of refractive training")
     parser.add_argument("--opt_mode", type = str, default = "native", help = "Optimization mode: none, native (torch amp), O1, O2 (apex amp)")
 
     args = parser.parse_args()      # spherical rendering is disabled (for now)

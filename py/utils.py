@@ -40,8 +40,7 @@ def inverseSample(weights:torch.Tensor, coarse_depth:torch.Tensor, sample_pnum:i
     # idxs is the lower and upper indices of inverse sampling intervals, which is of shape (ray_num, sample_num, 2)
     if sort:
         z_samples, sort_inds = torch.sort(z_samples, dim = -1)
-        idx_below = torch.gather(idxs, -1, sort_inds)
-        return z_samples, idx_below          # depth is used for rendering
+        return z_samples, sort_inds, idxs          # depth is used for rendering
     return z_samples
 
 # input (all training images, center_crop ratio)
@@ -101,7 +100,8 @@ def fov2Focal(fov, img_size):
         return (0.5 * img_size[0] / np.tan(.5 * fov[1]), 0.5 * img_size[1] / np.tan(.5 * fov[0]))
     if img_size[0] == img_size[1]:
         img_size = img_size[0]
-    return img_size / np.tan(.5 * fov)
+    focal = img_size / np.tan(.5 * fov)
+    return (focal, focal)
 
 # From official implementation, since using APEX will change the dtype of inputs, plain CUDA (with no template) won't work
 def sample_pdf(bins, weights, N_samples):
