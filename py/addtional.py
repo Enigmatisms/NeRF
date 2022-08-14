@@ -107,13 +107,5 @@ class ProposalNetwork(nn.Module):
         weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).cuda(), mult + 1e-10], -1), -1)[:, :-1]
         return weights     # output (ray_num, num of coarse sample (proposal interval number))
 
-    @staticmethod
-    def coarseFineMerge(coarse_pts:torch.Tensor, fine_pts:torch.Tensor, c_zvals:torch.Tensor, f_zvals:torch.Tensor):
-        all_pts = torch.cat((fine_pts, coarse_pts), dim = -2)
-        all_zvals = torch.cat((f_zvals, c_zvals), dim = -1)
-        all_zvals, sort_inds = torch.sort(all_zvals, dim = -1)
-        sorted_pts = torch.gather(all_pts, -2, sort_inds.unsqueeze(-1).expand(-1, -1, 6))
-        return sorted_pts, all_zvals, sort_inds
-
 if __name__ == "__main__":
     print("Hello NeRF world!")

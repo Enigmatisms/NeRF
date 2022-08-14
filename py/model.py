@@ -68,12 +68,8 @@ class NeRF(nn.Module):
 
 
     # for coarse network, input is obtained by sampling, sampling result is (ray_num, point_num, 9), (depth) (ray_num, point_num)
-    def forward(self, pts:torch.Tensor, encoded_pt:torch.Tensor = None) -> torch.Tensor:
+    def forward(self, pts:torch.Tensor) -> torch.Tensor:
         position_dim, direction_dim = 6 * self.position_flevel, 6 * self.direction_flevel
-        if not encoded_pt is None:
-            encoded_x = encoded_pt
-        else:
-            encoded_x = positional_encoding(pts[:, :, :3], self.position_flevel)
         rotation = pts[:, :, 3:6].reshape(-1, 3)
         rotation = rotation / rotation.norm(dim = -1, keepdim = True)
         encoded_r = positional_encoding(rotation, self.direction_flevel)
@@ -97,17 +93,6 @@ class NeRF(nn.Module):
         sample_pnum = f_zvals.shape[1]
         pts = rays[...,None,:3] + rays[...,None,3:] * f_zvals[...,:,None] 
         return torch.cat((pts, rays[:, 3:].unsqueeze(-2).repeat(1, sample_pnum, 1)), dim = -1)                 # output is (ray_num, coarse_pts num + fine pts num, 6)
-
-    # rays is of shape (ray_num, 6)
-    @staticmethod
-    def coarseFineMerge(rays:torch.Tensor, c_zvals:torch.Tensor, f_zvals:torch.Tensor) -> torch.Tensor:
-        zvals = torch.cat((f_zvals, c_zvals), dim = -1)
-        zvals, _ = torch.sort(zvals, dim = -1)
-        sample_pnum = f_zvals.shape[1] + c_zvals.shape[1]
-        # Use sort depth to calculate sampled points
-        pts = rays[...,None,:3] + rays[...,None,3:] * zvals[...,:,None] 
-        # depth * ray_direction + origin (this should be further tested)
-        return torch.cat((pts, rays[:, 3:].unsqueeze(-2).repeat(1, sample_pnum, 1)), dim = -1), zvals          # output is (ray_num, coarse_pts num + fine pts num, 6)
 
     """
         This function is important for inverse transform sampling, since for every ray
