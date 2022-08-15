@@ -9,8 +9,7 @@ from torchvision import transforms
 from torch.utils.data import DataLoader
 
 from py.timer import Timer
-from py.model import DecayLrScheduler
-from py.ref_model import RefNeRF
+from py.nerf_base import DecayLrScheduler, NeRF
 from py.dataset import CustomDataSet, AdaptiveResize
 from torchvision.utils import save_image
 from py.nerf_helper import nan_hook, saveModel
@@ -48,6 +47,7 @@ def main(args):
     scene_scale         = args.scene_scale
     use_white_bkg       = args.white_bkg
     opt_mode            = args.opt_mode        
+    use_ref_nerf        = args.ref_nerf
     train_cnt, ep_start = None, None
 
     if use_amp:
@@ -59,7 +59,14 @@ def main(args):
     
     # ======= instantiate model =====
     # NOTE: model is recommended to have loadFromFile method
-    mip_net = RefNeRF(10, args.ide_level, hidden_unit = 256, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
+    if use_ref_nerf:
+        from py.ref_model import RefNeRF, WeightedNormalLoss, BackFaceLoss
+        normal_loss_func = WeightedNormalLoss(False)
+        bf_loss_func = BackFaceLoss() 
+        mip_net = RefNeRF(10, args.ide_level, hidden_unit = 256, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
+    else:
+        from py.mip_model import MipNeRF
+        mip_net = MipNeRF(10, 4, hidden_unit = 256)
     prop_net = ProposalNetwork(10, hidden_unit = 256).cuda()
 
     if debugging:
@@ -135,42 +142,52 @@ def main(args):
                 valid_pixels, valid_coords, train_tf, sample_ray_num, coarse_sample_pnum, train_focal, near_t, far_t, True
             )
             # output 
-            def run():
+            def run(position_grad = False):
                 density = prop_net.forward(coarse_samples[..., :3])
                 prop_weights_raw = ProposalNetwork.get_weights(density, coarse_lengths, coarse_cam_rays[:, 3:])      # (ray_num, num of proposal interval)
                 prop_weights = maxBlurFilter(prop_weights_raw, 0.01)
 
                 fine_lengths, sort_inds, below_idxs = inverseSample(prop_weights, coarse_lengths, fine_sample_pnum + 1, sort = True)
                 fine_lengths = fine_lengths[..., :-1]
-                fine_samples = RefNeRF.length2pts(coarse_cam_rays, fine_lengths)
+                fine_samples = NeRF.length2pts(coarse_cam_rays, fine_lengths)
+                normal_loss = bf_loss = 0.
 
-                samples = torch.cat((fine_samples, coarse_cam_rays.unsqueeze(-2).repeat(1, fine_sample_pnum, 1)), dim = -1)
-                fine_rgbo = mip_net.forward(samples)
-                fine_rendered, weights = RefNeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])
+                if position_grad == True:
+                    fine_pos, fine_dir = fine_samples.split((3, 3), dim = -1)
+                    fine_pos.requires_grad = True
+                    fine_rgbo, pred_normal = mip_net.forward(fine_pos, fine_dir)
+                    r_num, p_num, _ = fine_rgbo.shape
+                    density_grad, = torch.autograd.grad(fine_rgbo[..., -1], fine_pos, 
+                        torch.ones(r_num, p_num, device = fine_rgbo.device), retain_graph = True
+                    )
+                    density_grad = density_grad / density_grad.norm(dim = -1, keepdim = True)
+                    fine_rendered, weights = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])
+                    normal_loss = normal_loss_func(weights, density_grad, pred_normal)
+                    bf_loss = bf_loss_func(weights, pred_normal, fine_dir)
+                else:
+                    fine_rgbo = mip_net.forward(fine_samples)
+                    fine_rendered, weights = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])
                 weight_bounds:torch.Tensor = getBounds(prop_weights, below_idxs, sort_inds)             # output shape: (ray_num, num of conical frustum)
-                prop_loss:torch.Tensor = prop_loss_func(weight_bounds, weights.detach())                # stop the gradient of NeRF MLP 
-                loss:torch.Tensor = prop_loss + loss_func(fine_rendered, rgb_targets) # + 0.01 * reg_loss_func(weights, fine_lengths)
-
                 opt.zero_grad()
                 img_loss:torch.Tensor = loss_func(fine_rendered, rgb_targets)                                           # stop the gradient of NeRF MLP 
 
                 prop_loss:torch.Tensor = prop_loss_func(weight_bounds, weights.detach())                # stop the gradient of NeRF MLP 
-                loss:torch.Tensor = prop_loss + loss_func(fine_rendered, rgb_targets) # + 0.01 * reg_loss_func(weights, fine_lengths)
+                loss:torch.Tensor = prop_loss + img_loss + 3e-4 * normal_loss + 0.1 * bf_loss           # + 0.01 * reg_loss_func(weights, fine_lengths)
                 return loss, img_loss
             if use_amp:
                 if opt_mode == "native":
                     with autocast():
-                        loss, img_loss = run()
+                        loss, img_loss = run(use_ref_nerf)
                         scaler.scale(loss).backward()
                         scaler.step(opt)
                         scaler.update()
                 else:
-                    loss, img_loss = run()
+                    loss, img_loss = run(use_ref_nerf)
                     with amp.scale_loss(loss, opt) as scaled_loss:
                         scaled_loss.backward()
                     opt.step()
             else:
-                loss, img_loss = run()
+                loss, img_loss = run(use_ref_nerf)
                 loss.backward()
                 opt.step()
 

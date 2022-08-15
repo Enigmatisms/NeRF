@@ -50,7 +50,7 @@ def positional_encoding(x:torch.Tensor, freq_level:int) -> torch.Tensor:
 def linear_to_srgb(linear: torch.Tensor, eps: float = None) -> torch.Tensor:
   """From JAX multiNeRF official repo: https://github.com/google-research/multinerf"""
   if eps is None:
-    eps = torch.finfo(torch.float32).eps
+    eps = torch.full((1, ), torch.finfo(torch.float32).eps, device = linear.device)
   srgb0 = 323 / 25 * linear
   srgb1 = (211 * torch.maximum(eps, linear)**(5 / 12) - 11) / 200
   return torch.where(linear <= 0.0031308, srgb0, srgb1)

@@ -5,7 +5,8 @@ import torch
 import argparse
 from tqdm import tqdm
 
-from py.model import NeRF
+from py.nerf_base import NeRF
+from py.ref_model import RefNeRF
 from torchvision import transforms
 from py.dataset import CustomDataSet, AdaptiveResize
 from py.addtional import ProposalNetwork
@@ -47,6 +48,7 @@ def render_image(
             patch_num = (image_size[0] // sz, image_size[1] // sz)
             break
 
+    is_ref_model = type(network) == RefNeRF
     for k in range(patch_num[0]):
         for j in range(patch_num[1]):
             camera_rays = torch.cat((render_pose[:, -1].expand(sz, sz, -1), ray_raw[(sz * k):(sz * (k + 1)), (sz * j):(sz * (j + 1))]), dim = -1).reshape(-1, 6)        # shape (2500, 6)
@@ -60,6 +62,8 @@ def render_image(
             fine_samples = NeRF.length2pts(camera_rays, fine_lengths)
             samples = torch.cat((fine_samples, camera_rays.unsqueeze(-2).repeat(1, sample_num, 1)), dim = -1)
             output_rgbo = network.forward(samples)
+            if is_ref_model == True:
+                output_rgbo, _ = output_rgbo
 
             part_image, _ = NeRF.render(
                 output_rgbo, fine_lengths, camera_rays[..., 3:], white_bkg = white_bkg
@@ -88,7 +92,8 @@ def render_only(args, model_path: str, opt_level: str):
     r_c = testset.r_c()
     test_focal = fov2Focal(cam_fov_test, r_c)
 
-    mip_net = NeRF(10, 4, hidden_unit = 256).cuda()
+    from py.mip_model import MipNeRF
+    mip_net = MipNeRF(10, 4, hidden_unit = 256).cuda()
     prop_net = ProposalNetwork(10, hidden_unit = 256).cuda()
     if use_amp and opt_mode != "native":
         from apex import amp
@@ -138,4 +143,6 @@ def get_parser():
     parser.add_argument("-v", "--visualize", default = False, action = "store_true", help = "Visualize proposal network")
     parser.add_argument("-r", "--do_render", default = False, action = "store_true", help = "Only render the result")
     parser.add_argument("-w", "--white_bkg", default = False, action = "store_true", help = "Output white background")
+    parser.add_argument("-t", "--ref_nerf", default = False, action = "store_true", help = "Test Ref NeRF")
+
     return parser
