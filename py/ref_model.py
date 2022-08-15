@@ -8,6 +8,7 @@ from numpy import log
 import torch
 from torch import nn
 from torch.nn import functional as F
+from py.ref_func import generate_ide_fn
 from py.nerf_helper import makeMLP, positional_encoding, linear_to_srgb
 
 # This module is shared by coarse and fine network, with no need to modify
@@ -28,14 +29,14 @@ class RefNeRF(nn.Module):
         hidden_unit = 256, 
         output_dim = 256, 
         use_srgb = False,
-        cat_origin = True,          # TODO: 检查directional encoding涉及到是否需要进行自我concatenate
-        perturb_bottle_neck_w = 0.5,
+        cat_origin = True,
+        perturb_bottle_neck_w = 0.1,
     ) -> None:
         super().__init__()
         self.position_flevel = position_flevel
         self.sh_max_level = sh_max_level
         self.bottle_neck_dim = bottle_neck_dim
-        self.dir_enc_dim = 0 # TODO: 需要计算sh encoding的dimension
+        self.dir_enc_dim = (1 << sh_max_level) - 1 + sh_max_level
 
         extra_width = 3 if cat_origin else 0
         spatial_module_list = makeMLP(60 + extra_width, hidden_unit)
@@ -71,6 +72,7 @@ class RefNeRF(nn.Module):
         self.use_srgb = use_srgb
         self.cat_origin = cat_origin
         self.perturb_bottle_neck_w = perturb_bottle_neck_w
+        self.integrated_dir_enc = generate_ide_fn(sh_max_level)
         self.apply(self.init_weight)
 
     def loadFromFile(self, load_path:str, use_amp = False, opt = None, other_stuff = None):
@@ -109,6 +111,7 @@ class RefNeRF(nn.Module):
         spa_info_b = spa_info_b + torch.normal(0, self.perturb_bottle_neck_w, spa_info_b.shape)
 
         normal = normal / (normal.norm(dim = -1, keepdim = True) + 1e-6)
+        # needs further validation
         reflect_r = pts[..., 3:] - 2. * torch.sum(pts[..., 3:] * normal, dim = -1, keepdim = True) * normal
         wr_ide = self.integrated_dir_enc(reflect_r, roughness)
         nv_dot = -torch.sum(normal * pts[..., 3:], dim = -1, keepdim = True)     # normal dot (-view_dir)
@@ -126,10 +129,6 @@ class RefNeRF(nn.Module):
             rgb = torch.clip(specular_rgb + diffuse_rgb, 0.0, 1.0)
 
         return torch.cat((rgb, density), dim = -1)      # output (ray_num, point_num, 4)
-
-    # TODO: 此处需要定义球谐函数，计算vMF积分后的球谐函数 对应的encoding
-    def integrated_dir_enc(self, dir_vec:torch.Tensor, roughness: torch.Tensor) -> torch.Tensor:
-        return torch.zeros(1)
 
     @staticmethod
     def length2pts(rays:torch.Tensor, f_zvals:torch.Tensor) -> torch.Tensor:
