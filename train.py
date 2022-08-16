@@ -88,8 +88,8 @@ def main(args):
     ])
 
     # 数据集加载
-    trainset = CustomDataSet("../dataset/nerf_synthetic/%s/"%(dataset_name), transform_funcs, scene_scale, True, use_alpha = False, white_bkg = use_white_bkg)
-    testset = CustomDataSet("../dataset/nerf_synthetic/%s/"%(dataset_name), transform_funcs, scene_scale, False, use_alpha = False, white_bkg = use_white_bkg)
+    trainset = CustomDataSet("../dataset/refnerf/%s/"%(dataset_name), transform_funcs, scene_scale, True, use_alpha = False, white_bkg = use_white_bkg)
+    testset = CustomDataSet("../dataset/refnerf/%s/"%(dataset_name), transform_funcs, scene_scale, False, use_alpha = False, white_bkg = use_white_bkg)
     cam_fov_train, train_cam_tf = trainset.getCameraParam()
     r_c = trainset.r_c()
     train_cam_tf = train_cam_tf.cuda()
@@ -215,7 +215,7 @@ def main(args):
                 writer.add_scalar('PSNR', psnr, train_cnt)
             train_cnt += 1
 
-        if ((ep % output_time == 0) or ep == epochs - 1):
+        if ((ep % output_time == 0) or ep == epochs - 1) and (ep > ep_start):
             mip_net.eval()
             prop_net.eval()
             with torch.no_grad():
