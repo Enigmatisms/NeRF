@@ -85,7 +85,7 @@ class DecayLrScheduler:
         self.warmup_step = warmup_step
         self.lr = lr
         if warmup_step > 0:
-            print("Warming up step: %d", warmup_step)
+            print("Warming up step: %d"%(warmup_step))
 
     def update_opt_lr(self, train_cnt, opt: torch.optim.Optimizer = None):
         if train_cnt < self.warmup_step:

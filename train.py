@@ -63,9 +63,9 @@ def main(args):
     # NOTE: model is recommended to have loadFromFile method
     if use_ref_nerf:
         from py.ref_model import RefNeRF, WeightedNormalLoss, BackFaceLoss
-        normal_loss_func = WeightedNormalLoss(False)
+        normal_loss_func = WeightedNormalLoss(True)
         bf_loss_func = BackFaceLoss() 
-        mip_net = RefNeRF(10, args.ide_level, hidden_unit = 256, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
+        mip_net = RefNeRF(16, args.ide_level, hidden_unit = 256, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
     else:
         from py.mip_model import MipNeRF
         mip_net = MipNeRF(10, 4, hidden_unit = 256)
@@ -166,7 +166,7 @@ def main(args):
                         torch.ones(r_num, p_num, device = fine_rgbo.device), retain_graph = True
                     )
                     density_grad = density_grad / density_grad.norm(dim = -1, keepdim = True)
-                    fine_rgbo[..., -1] = F.softplus(fine_rgbo[..., -1] - 1.)
+                    fine_rgbo[..., -1] = F.softplus(fine_rgbo[..., -1] + 0.5)
                     fine_rendered, weights = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:], mip_net.density_act)
                     normal_loss = normal_loss_func(weights, density_grad, pred_normal)
                     bf_loss = bf_loss_func(weights, pred_normal, fine_dir)
@@ -185,19 +185,19 @@ def main(args):
                     with autocast():
                         loss, img_loss = run(use_ref_nerf)
                         scaler.scale(loss).backward()
-                        grad_clip_func(mip_net.parameters(), grad_clip_val)
+                        grad_clip_func(grad_vars, grad_clip_val)
                         scaler.step(opt)
                         scaler.update()
                 else:
                     loss, img_loss = run(use_ref_nerf)
                     with amp.scale_loss(loss, opt) as scaled_loss:
                         scaled_loss.backward()
-                    grad_clip_func(mip_net.parameters(), grad_clip_val)
+                    grad_clip_func(grad_vars, grad_clip_val)
                     opt.step()
             else:
                 loss, img_loss = run(use_ref_nerf)
                 loss.backward()
-                grad_clip_func(mip_net.parameters(), grad_clip_val)
+                grad_clip_func(grad_vars, grad_clip_val)
                 opt.step()
 
             train_timer.toc()
@@ -254,9 +254,9 @@ if __name__ == "__main__":
     parser = get_parser()
 
     parser.add_argument("--pe_period_scale", type = float, default = 0.5, help = "Scale of positional encoding")
-    parser.add_argument("--opt_mode", type = str, default = "native", help = "Optimization mode: none, native (torch amp), O1, O2 (apex amp)")
+    parser.add_argument("--opt_mode", type = str, default = "O1", help = "Optimization mode: none, native (torch amp), O1, O2 (apex amp)")
 
-    parser.add_argument("--ide_level", type = int, default = 5, help = "Max level of spherical harmonics to be used")
+    parser.add_argument("--ide_level", type = int, default = 4, help = "Max level of spherical harmonics to be used")
     parser.add_argument("--bottle_neck_noise", type = float, default = 0.1, help = "Noise std for perturbing bottle_neck vector")
     parser.add_argument("-u", "--use_srgb", default = False, action = "store_true", help = "Whether to use srgb in the output or not")
 

@@ -102,7 +102,6 @@ def generate_ide_fn(deg_view):
 
     # Apply attenuation function using the von Mises-Fisher distribution
     # concentration parameter, kappa.
-    ml_array_cu = torch.from_numpy(ml_array).cuda()
     sigma = 0.5 * ml_array_cu[1, :] * (ml_array_cu[1, :] + 1)
     ide = sph_harms * torch.exp(-sigma * kappa_inv)
     # Split into real and imaginary parts and return

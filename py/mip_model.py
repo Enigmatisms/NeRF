@@ -16,13 +16,13 @@ class MipNeRF(NeRF):
         super().__init__(position_flevel, cat_origin)
         self.direction_flevel = direction_flevel
         extra_width = 3 if cat_origin else 0
-        module_list = makeMLP(60 + extra_width, hidden_unit)
+        module_list = makeMLP(6 * position_flevel + extra_width, hidden_unit)
         for _ in range(3):
             module_list.extend(makeMLP(hidden_unit, hidden_unit))
 
         self.lin_block1 = nn.Sequential(*module_list)       # MLP before skip connection
         self.lin_block2 = nn.Sequential(
-            *makeMLP(hidden_unit + 60 + extra_width, hidden_unit),
+            *makeMLP(hidden_unit + 6 * position_flevel + extra_width, hidden_unit),
             *makeMLP(hidden_unit, hidden_unit), *makeMLP(hidden_unit, 256)
         )
 

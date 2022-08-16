@@ -29,14 +29,14 @@ class RefNeRF(NeRF):
         self.dir_enc_dim = ((1 << sh_max_level) - 1 + sh_max_level) << 1
 
         extra_width = 3 if cat_origin else 0
-        spatial_module_list = makeMLP(60 + extra_width, hidden_unit)
+        spatial_module_list = makeMLP(6 * position_flevel + extra_width, hidden_unit)
         for _ in range(3):
             spatial_module_list.extend(makeMLP(hidden_unit, hidden_unit))
 
         # spatial MLP part (spa_xxxx)
         self.spa_block1 = nn.Sequential(*spatial_module_list)       # MLP before skip connection
         self.spa_block2 = nn.Sequential(
-            *makeMLP(hidden_unit + 60 + extra_width, hidden_unit),
+            *makeMLP(hidden_unit + 6 * position_flevel + extra_width, hidden_unit),
             *makeMLP(hidden_unit, hidden_unit), *makeMLP(hidden_unit, hidden_unit),
             *makeMLP(hidden_unit, output_dim)
         )
@@ -96,12 +96,11 @@ class RefNeRF(NeRF):
 
         specular_rgb = self.spec_rgb_head(self.dir_block2(all_inputs)) * F.sigmoid(spec_tint) 
         if self.use_srgb == True:
-            diffuse_rgb = F.sigmoid(diffuse_rgb - log(3.))
+            diffuse_rgb = torch.sigmoid(diffuse_rgb - log(3.))
             rgb = torch.clip(linear_to_srgb(specular_rgb + diffuse_rgb), 0.0, 1.0)
         else:
-            diffuse_rgb = F.sigmoid(diffuse_rgb)
+            diffuse_rgb = torch.sigmoid(diffuse_rgb)
             rgb = torch.clip(specular_rgb + diffuse_rgb, 0.0, 1.0)
-
         return torch.cat((rgb, density), dim = -1), normal      # output (ray_num, point_num, 4) + (ray_num, point_num, 3)
 
 class WeightedNormalLoss(nn.Module):
@@ -121,4 +120,4 @@ class BackFaceLoss(nn.Module):
 
     # 注意，可以使用pts[..., 3:] 作为输入
     def forward(self, weight:torch.Tensor, normal: torch.Tensor, ray_d: torch.Tensor) -> torch.Tensor:
-        return torch.sum(weight * F.relu(torch.sum(normal * ray_d, dim = -1)))
+        return torch.mean(weight * F.relu(torch.sum(normal * ray_d, dim = -1)))

@@ -10,6 +10,7 @@ from py.ref_model import RefNeRF
 from torchvision import transforms
 from py.dataset import CustomDataSet, AdaptiveResize
 from py.addtional import ProposalNetwork
+from torch.nn.functional import softplus
 from torchvision.utils import save_image
 from py.mip_methods import maxBlurFilter
 from py.utils import fov2Focal, inverseSample, pose_spherical
@@ -63,6 +64,7 @@ def render_image(
             output_rgbo = network.forward(fine_samples)
             if is_ref_model == True:
                 output_rgbo, _ = output_rgbo
+                output_rgbo[..., -1] = softplus(output_rgbo[..., -1] + 0.5)
 
             part_image, _ = NeRF.render(
                 output_rgbo, fine_lengths, camera_rays[..., 3:], white_bkg = white_bkg, density_act = network.density_act
@@ -120,7 +122,7 @@ def get_parser():
     parser.add_argument("--fine_sample_pnum", type = int, default = 128, help = "Points to sample in fine net")
     parser.add_argument("--eval_time", type = int, default = 5, help = "Tensorboard output interval (train time)")
     parser.add_argument("--output_time", type = int, default = 20, help = "Image output interval (train time)")
-    parser.add_argument("--center_crop_iter", type = int, default = 500, help = "Produce center")
+    parser.add_argument("--center_crop_iter", type = int, default = 1000, help = "Produce center")
     parser.add_argument("--near", type = float, default = 2., help = "Nearest sample depth")
     parser.add_argument("--far", type = float, default = 6., help = "Farthest sample depth")
     parser.add_argument("--center_crop_x", type = float, default = 0.5, help = "Center crop x axis ratio")
@@ -131,11 +133,11 @@ def get_parser():
     parser.add_argument("--scene_scale", type = float, default = 1.0, help = "Scale of the scene")
     parser.add_argument("--grad_clip", type = float, default = 1e-3, help = "Gradient clipping parameter")
     # opt related
-    parser.add_argument("--min_ratio", type = float, default = 0.02, help = "Minimum for now_lr / lr")
+    parser.add_argument("--min_ratio", type = float, default = 0.01, help = "Minimum for now_lr / lr")
     parser.add_argument("--decay_rate", type = float, default = 0.1, help = "After <decay step>, lr = lr * <decay_rate>")
     parser.add_argument("--decay_step", type = int, default = 100000, help = "After <decay step>, lr = lr * <decay_rate>")
-    parser.add_argument("--warmup_step", type = int, default = 200, help = "Warm up step (from lowest lr to starting lr)")
-    parser.add_argument("--lr", type = float, default = 5e-4, help = "Start lr")
+    parser.add_argument("--warmup_step", type = int, default = 500, help = "Warm up step (from lowest lr to starting lr)")
+    parser.add_argument("--lr", type = float, default = 1e-4, help = "Start lr")
     # bool options
     parser.add_argument("-d", "--del_dir", default = False, action = "store_true", help = "Delete dir ./logs and start new tensorboard records")
     parser.add_argument("-l", "--load", default = False, action = "store_true", help = "Load checkpoint or trained model.")
