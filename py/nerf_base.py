@@ -20,10 +20,11 @@ class NeRF(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def __init__(self, position_flevel, cat_origin = True) -> None:
+    def __init__(self, position_flevel, cat_origin = True, density_act = F.relu) -> None:
         super().__init__()
         self.position_flevel = position_flevel
         self.cat_origin = cat_origin
+        self.density_act = density_act
 
     def loadFromFile(self, load_path:str, use_amp = False, opt = None, other_stuff = None):
         save = torch.load(load_path)   
@@ -52,10 +53,10 @@ class NeRF(nn.Module):
         we will have 64 normalized weights (summing to 1.) for inverse sampling
     """
     @staticmethod
-    def getNormedWeight(opacity:torch.Tensor, depth:torch.Tensor) -> torch.Tensor:
+    def getNormedWeight(opacity:torch.Tensor, depth:torch.Tensor, density_act = F.relu) -> torch.Tensor:
         delta:torch.Tensor = torch.cat((depth[:, 1:] - depth[:, :-1], torch.FloatTensor([1e10]).repeat((depth.shape[0], 1)).cuda()), dim = -1)
         # print(opacity.shape, depth[:, 1:].shape, raw_delta.shape, delta.shape)
-        mult:torch.Tensor = torch.exp(-F.relu(opacity) * delta)
+        mult:torch.Tensor = torch.exp(-density_act(opacity) * delta)
         alpha:torch.Tensor = 1. - mult
         # fusion requires normalization, rgb output should be passed through sigmoid
         weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).cuda(), mult + 1e-10], -1), -1)[:, :-1]
@@ -64,12 +65,12 @@ class NeRF(nn.Module):
     # depth shape: (ray_num, point_num)
     # need the norm of rays, shape: (ray_num, point_num)
     @staticmethod
-    def render(rgbo:torch.Tensor, depth:torch.Tensor, ray_dirs:torch.Tensor, mul_norm:bool = True, white_bkg:bool = False) -> torch.Tensor:
+    def render(rgbo:torch.Tensor, depth:torch.Tensor, ray_dirs:torch.Tensor, mul_norm:bool = True, white_bkg:bool = False, density_act = F.relu) -> torch.Tensor:
         if mul_norm == True:
             depth = depth * (ray_dirs.norm(dim = -1, keepdim = True))
         rgb:torch.Tensor = rgbo[..., :3] # shape (ray_num, pnum, 3)
         opacity:torch.Tensor = rgbo[..., -1]             # 1e-5 is used for eliminating numerical instability
-        weights = NeRF.getNormedWeight(opacity, depth)
+        weights = NeRF.getNormedWeight(opacity, depth, density_act)
         rgb:torch.Tensor = torch.sum(weights[:, :, None] * rgb, dim = -2)
         if white_bkg:
             acc_map = torch.sum(weights, -1)
@@ -77,14 +78,21 @@ class NeRF(nn.Module):
         return rgb, weights     # output (ray_num, 3) and (ray_num, point_num)
 
 class DecayLrScheduler:
-    def __init__(self, min_r, decay_r, step, lr):
+    def __init__(self, min_r, decay_r, step, lr, warmup_step = 0):
         self.min_ratio = min_r
         self.decay_rate = decay_r
         self.decay_step = step
+        self.warmup_step = warmup_step
         self.lr = lr
+        if warmup_step > 0:
+            print("Warming up step: %d", warmup_step)
 
     def update_opt_lr(self, train_cnt, opt: torch.optim.Optimizer = None):
-        new_lrate = self.lr * max((self.decay_rate ** (train_cnt / self.decay_step)), self.min_ratio)
+        if train_cnt < self.warmup_step:
+            ratio = train_cnt / self.warmup_step
+            new_lrate = self.lr * (self.min_ratio * (1. - ratio) + ratio)
+        else:
+            new_lrate = self.lr * max((self.decay_rate ** ((train_cnt - self.warmup_step) / self.decay_step)), self.min_ratio)
         if opt is not None:
             for param_group in opt.param_groups:
                 param_group['lr'] = new_lrate

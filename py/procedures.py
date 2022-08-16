@@ -60,13 +60,12 @@ def render_image(
             fine_lengths, _, _ = inverseSample(prop_weights, sampled_lengths, sample_num + 1, sort = True)
             fine_lengths = fine_lengths[..., :-1]
             fine_samples = NeRF.length2pts(camera_rays, fine_lengths)
-            samples = torch.cat((fine_samples, camera_rays.unsqueeze(-2).repeat(1, sample_num, 1)), dim = -1)
-            output_rgbo = network.forward(samples)
+            output_rgbo = network.forward(fine_samples)
             if is_ref_model == True:
                 output_rgbo, _ = output_rgbo
 
             part_image, _ = NeRF.render(
-                output_rgbo, fine_lengths, camera_rays[..., 3:], white_bkg = white_bkg
+                output_rgbo, fine_lengths, camera_rays[..., 3:], white_bkg = white_bkg, density_act = network.density_act
             )          # originally outputs (2500, 3) -> (reshape) (sz, sz, 3) -> (to image) (3, sz, sz)
             resulting_image[:, (sz * k):(sz * (k + 1)), (sz * j):(sz * (j + 1))] = part_image.view(sz, sz, 3).permute(2, 0, 1)
     return resulting_image
@@ -130,10 +129,12 @@ def get_parser():
     parser.add_argument("--dataset_name", type = str, default = "lego", help = "Input dataset name in nerf synthetic dataset")
     parser.add_argument("--img_scale", type = float, default = 0.5, help = "Scale of the image")
     parser.add_argument("--scene_scale", type = float, default = 1.0, help = "Scale of the scene")
+    parser.add_argument("--grad_clip", type = float, default = 1e-3, help = "Gradient clipping parameter")
     # opt related
     parser.add_argument("--min_ratio", type = float, default = 0.02, help = "Minimum for now_lr / lr")
     parser.add_argument("--decay_rate", type = float, default = 0.1, help = "After <decay step>, lr = lr * <decay_rate>")
     parser.add_argument("--decay_step", type = int, default = 100000, help = "After <decay step>, lr = lr * <decay_rate>")
+    parser.add_argument("--warmup_step", type = int, default = 200, help = "Warm up step (from lowest lr to starting lr)")
     parser.add_argument("--lr", type = float, default = 5e-4, help = "Start lr")
     # bool options
     parser.add_argument("-d", "--del_dir", default = False, action = "store_true", help = "Delete dir ./logs and start new tensorboard records")

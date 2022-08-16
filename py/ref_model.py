@@ -23,7 +23,7 @@ class RefNeRF(NeRF):
         cat_origin = True,
         perturb_bottle_neck_w = 0.1,
     ) -> None:
-        super().__init__(position_flevel, cat_origin)
+        super().__init__(position_flevel, cat_origin, lambda x: x)          # density is not activated during render
         self.sh_max_level = sh_max_level
         self.bottle_neck_dim = bottle_neck_dim
         self.dir_enc_dim = ((1 << sh_max_level) - 1 + sh_max_level) << 1
@@ -83,12 +83,12 @@ class RefNeRF(NeRF):
         spa_info_b = self.bottle_neck(intermediate)
         spa_info_b = spa_info_b + torch.normal(0, self.perturb_bottle_neck_w, spa_info_b.shape, device = spa_info_b.device)
 
-        normal = normal / (normal.norm(dim = -1, keepdim = True) + 1e-6)
+        normal = -normal / (normal.norm(dim = -1, keepdim = True) + 1e-6)
         # needs further validation
         ray_d = pts[..., 3:] if ray_d is None else ray_d
         reflect_r = ray_d - 2. * torch.sum(ray_d * normal, dim = -1, keepdim = True) * normal
         wr_ide = self.integrated_dir_enc(reflect_r, roughness)
-        nv_dot = -torch.sum(normal * ray_d, dim = -1, keepdim = True)     # normal dot (-view_dir)
+        nv_dot = torch.sum(normal * ray_d, dim = -1, keepdim = True)     # normal dot (-view_dir)
 
         all_inputs = torch.cat((spa_info_b, wr_ide, nv_dot), dim = -1)
         r_tmp = self.dir_block1(all_inputs)
@@ -111,9 +111,9 @@ class WeightedNormalLoss(nn.Module):
     
     # weight (ray_num, point_num)
     def forward(self, weight:torch.Tensor, d_norm: torch.Tensor, p_norm: torch.Tensor) -> torch.Tensor:
-        norm_diff = torch.pow((d_norm - p_norm), 2)
-        res = torch.sum(weight.unsqueeze(-1) * norm_diff)
-        return res / weight.numel() if self.size_average == True else res
+        dot_diff = 1. - torch.sum(d_norm * p_norm, dim = -1)
+        # norm_diff = torch.pow((d_norm - p_norm), 2)
+        return torch.mean(weight * dot_diff) if self.size_average == True else torch.sum(weight * dot_diff)
 
 class BackFaceLoss(nn.Module):
     def __init__(self):

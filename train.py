@@ -7,6 +7,7 @@ import torch
 from torch import optim
 from torchvision import transforms
 from torch.utils.data import DataLoader
+import torch.nn.functional as F
 
 from py.timer import Timer
 from py.nerf_base import DecayLrScheduler, NeRF
@@ -48,6 +49,7 @@ def main(args):
     use_white_bkg       = args.white_bkg
     opt_mode            = args.opt_mode        
     use_ref_nerf        = args.ref_nerf
+    grad_clip_val       = args.grad_clip
     train_cnt, ep_start = None, None
 
     if use_amp:
@@ -101,6 +103,9 @@ def main(args):
 
     grad_vars = list(mip_net.parameters()) + list(prop_net.parameters())
     opt = optim.Adam(params = grad_vars, lr = args.lr, betas=(0.9, 0.999))
+    def grad_clip_func(parameters, grad_clip):
+        if grad_clip > 0.:
+            torch.nn.utils.clip_grad_norm_(parameters, grad_clip)
 
     if use_amp:
         if opt_mode.lower() != "native":
@@ -112,7 +117,7 @@ def main(args):
         prop_net.loadFromFile(load_path_prop, use_amp and opt_mode != "native")
     else:
         print("Not loading or load path '%s' / '%s' does not exist."%(load_path_mip, load_path_prop))
-    lr_sch = DecayLrScheduler(args.min_ratio, args.decay_rate, args.decay_step, args.lr)
+    lr_sch = DecayLrScheduler(args.min_ratio, args.decay_rate, args.decay_step, args.lr, args.warmup_step)
 
     test_views = []
     for i in (1, 4):
@@ -161,7 +166,8 @@ def main(args):
                         torch.ones(r_num, p_num, device = fine_rgbo.device), retain_graph = True
                     )
                     density_grad = density_grad / density_grad.norm(dim = -1, keepdim = True)
-                    fine_rendered, weights = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])
+                    fine_rgbo[..., -1] = F.softplus(fine_rgbo[..., -1] - 1.)
+                    fine_rendered, weights = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:], mip_net.density_act)
                     normal_loss = normal_loss_func(weights, density_grad, pred_normal)
                     bf_loss = bf_loss_func(weights, pred_normal, fine_dir)
                 else:
@@ -179,16 +185,19 @@ def main(args):
                     with autocast():
                         loss, img_loss = run(use_ref_nerf)
                         scaler.scale(loss).backward()
+                        grad_clip_func(mip_net.parameters(), grad_clip_val)
                         scaler.step(opt)
                         scaler.update()
                 else:
                     loss, img_loss = run(use_ref_nerf)
                     with amp.scale_loss(loss, opt) as scaled_loss:
                         scaled_loss.backward()
+                    grad_clip_func(mip_net.parameters(), grad_clip_val)
                     opt.step()
             else:
                 loss, img_loss = run(use_ref_nerf)
                 loss.backward()
+                grad_clip_func(mip_net.parameters(), grad_clip_val)
                 opt.step()
 
             train_timer.toc()
@@ -206,7 +215,7 @@ def main(args):
                 writer.add_scalar('PSNR', psnr, train_cnt)
             train_cnt += 1
 
-        if ((ep % output_time == 0) or ep == epochs - 1) and ep > ep_start:
+        if ((ep % output_time == 0) or ep == epochs - 1):
             mip_net.eval()
             prop_net.eval()
             with torch.no_grad():
