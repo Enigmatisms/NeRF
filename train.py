@@ -50,6 +50,9 @@ def main(args):
     opt_mode            = args.opt_mode        
     use_ref_nerf        = args.ref_nerf
     grad_clip_val       = args.grad_clip
+    render_depth        = args.render_depth
+    render_normal       = args.render_normal
+    actual_lr           = args.lr * sample_ray_num / 512        # bigger batch -> higher lr (linearity)
     train_cnt, ep_start = None, None
 
     if use_amp:
@@ -102,7 +105,7 @@ def main(args):
     print("Training focal: (%f, %f), image size: (w: %d, h: %d)"%(train_focal[0], train_focal[1], r_c[1], r_c[0]))
 
     grad_vars = list(mip_net.parameters()) + list(prop_net.parameters())
-    opt = optim.Adam(params = grad_vars, lr = args.lr, betas=(0.9, 0.999))
+    opt = optim.Adam(params = grad_vars, lr = actual_lr, betas=(0.9, 0.999))
     def grad_clip_func(parameters, grad_clip):
         if grad_clip > 0.:
             torch.nn.utils.clip_grad_norm_(parameters, grad_clip)
@@ -117,7 +120,7 @@ def main(args):
         prop_net.loadFromFile(load_path_prop, use_amp and opt_mode != "native")
     else:
         print("Not loading or load path '%s' / '%s' does not exist."%(load_path_mip, load_path_prop))
-    lr_sch = DecayLrScheduler(args.min_ratio, args.decay_rate, args.decay_step, args.lr, args.warmup_step)
+    lr_sch = DecayLrScheduler(args.min_ratio, args.decay_rate, args.decay_step, actual_lr, args.warmup_step)
 
     test_views = []
     for i in (1, 4):
@@ -167,12 +170,12 @@ def main(args):
                     )
                     density_grad = density_grad / density_grad.norm(dim = -1, keepdim = True)
                     fine_rgbo[..., -1] = F.softplus(fine_rgbo[..., -1] + 0.5)
-                    fine_rendered, weights = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:], mip_net.density_act)
+                    fine_rendered, weights, _ = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:], mip_net.density_act)
                     normal_loss = normal_loss_func(weights, density_grad, pred_normal)
                     bf_loss = bf_loss_func(weights, pred_normal, fine_dir)
                 else:
                     fine_rgbo = mip_net.forward(fine_samples)
-                    fine_rendered, weights = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])
+                    fine_rendered, weights, _ = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])
                 weight_bounds:torch.Tensor = getBounds(prop_weights, below_idxs, sort_inds)             # output shape: (ray_num, num of conical frustum)
                 opt.zero_grad()
                 img_loss:torch.Tensor = loss_func(fine_rendered, rgb_targets)                                           # stop the gradient of NeRF MLP 
@@ -215,7 +218,7 @@ def main(args):
                 writer.add_scalar('PSNR', psnr, train_cnt)
             train_cnt += 1
 
-        if ((ep % output_time == 0) or ep == epochs - 1) and (ep > ep_start):
+        if ((ep % output_time == 0) or ep == epochs - 1):
             mip_net.eval()
             prop_net.eval()
             with torch.no_grad():
@@ -223,9 +226,13 @@ def main(args):
                 test_results = []
                 test_loss = torch.zeros(1).cuda()
                 for test_img, test_tf in test_views:
-                    test_result = render_image(mip_net, prop_net, test_tf.cuda(), r_c, test_focal, near_t, far_t, fine_sample_pnum, white_bkg = use_white_bkg)
-                    test_results.append(test_result)
-                    test_loss += loss_func(test_result, test_img.cuda())
+                    test_result = render_image(
+                        mip_net, prop_net, test_tf.cuda(), r_c, test_focal, near_t, far_t, fine_sample_pnum, 
+                        white_bkg = use_white_bkg, render_depth = render_depth, render_normal = render_normal
+                    )
+                    for value in test_result.values():
+                        test_results.append(value)
+                    test_loss += loss_func(test_result["rgb"], test_img.cuda())
                 eval_timer.toc()
                 writer.add_scalar('Test Loss', loss, test_cnt)
                 print("Evaluation in epoch: %4d / %4d\t, test counter: %d test loss: %.4f\taverage time: %.4lf\tremaining eval time:%s"%(
@@ -233,7 +240,7 @@ def main(args):
                 ))
                 images_to_save = []
                 images_to_save.extend(test_results)
-                save_image(images_to_save, "./output/result_%03d.png"%(test_cnt), nrow = len(test_views))
+                save_image(images_to_save, "./output/result_%03d.png"%(test_cnt), nrow = 3)
                 # ======== Saving checkpoints ========
                 saveModel(mip_net,  "%schkpt_%d_mip.pt"%(default_chkpt_path, train_cnt), {"train_cnt": train_cnt, "epoch": ep}, opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
                 saveModel(prop_net,  "%schkpt_%d_prop.pt"%(default_chkpt_path, train_cnt), opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
@@ -258,6 +265,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--ide_level", type = int, default = 4, help = "Max level of spherical harmonics to be used")
     parser.add_argument("--bottle_neck_noise", type = float, default = 0.02, help = "Noise std for perturbing bottle_neck vector")
+    parser.add_argument("--render_normal", default = False, action = "store_true", help = "Render normal image")
     parser.add_argument("-u", "--use_srgb", default = False, action = "store_true", help = "Whether to use srgb in the output or not")
 
     args = parser.parse_args()      # spherical rendering is disabled (for now)

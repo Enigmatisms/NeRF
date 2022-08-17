@@ -22,7 +22,7 @@ POSSIBLE_PATCH_SIZE = [50, 40, 60, 30]
 # image size is (row, col)
 def render_image(
     network:NeRF, prop_net:ProposalNetwork, render_pose:torch.Tensor, image_size, focal,
-    near:float, far:float, sample_num:int=128, white_bkg:bool = False
+    near:float, far:float, sample_num:int=128, white_bkg:bool = False, render_depth = False, render_normal = False
 ) -> torch.Tensor:
     if not isinstance(image_size, Iterable):
         image_size = (image_size, image_size)
@@ -40,6 +40,10 @@ def render_image(
     all_lengths = torch.linspace(near, far, 64, device = target_device)
 
     resulting_image = torch.zeros((3, image_size[0], image_size[1]), dtype = torch.float32, device = target_device)
+    if render_normal:
+        normal_img = torch.zeros((3, image_size[0], image_size[1]), dtype = torch.float32, device = target_device)
+    if render_depth:
+        depth_img = torch.zeros((3, image_size[0], image_size[1]), dtype = torch.float32, device = target_device)
     resolution = (far - near) / sample_num
 
     sz = 50
@@ -63,14 +67,27 @@ def render_image(
             fine_samples = NeRF.length2pts(camera_rays, fine_lengths)
             output_rgbo = network.forward(fine_samples)
             if is_ref_model == True:
-                output_rgbo, _ = output_rgbo
+                output_rgbo, normal = output_rgbo
                 output_rgbo[..., -1] = softplus(output_rgbo[..., -1] + 0.5)
 
-            part_image, _ = NeRF.render(
-                output_rgbo, fine_lengths, camera_rays[..., 3:], white_bkg = white_bkg, density_act = network.density_act
+            part_image, _, extras = NeRF.render(
+                output_rgbo, fine_lengths, camera_rays[..., 3:], 
+                white_bkg = white_bkg, density_act = network.density_act, 
+                render_depth = (near, far) if render_depth else None, 
+                normal_info = (normal, render_pose[:, -2]) if render_normal else None
             )          # originally outputs (2500, 3) -> (reshape) (sz, sz, 3) -> (to image) (3, sz, sz)
             resulting_image[:, (sz * k):(sz * (k + 1)), (sz * j):(sz * (j + 1))] = part_image.view(sz, sz, 3).permute(2, 0, 1)
-    return resulting_image
+            if render_depth == True:
+                depth_img[:, (sz * k):(sz * (k + 1)), (sz * j):(sz * (j + 1))] = extras["depth_img"].view(sz, sz)
+            if render_normal == True:
+                normal_img[:, (sz * k):(sz * (k + 1)), (sz * j):(sz * (j + 1))] = extras["normal_img"].view(sz, sz)
+    result = dict()
+    result["rgb"] = resulting_image
+    if render_depth:
+        result["depth_img"] = depth_img
+    if render_normal:
+        result["normal_img"] = normal_img
+    return result
 
 def render_only(args, model_path: str, opt_level: str):
     use_amp             = args.use_scaler
@@ -109,10 +126,10 @@ def render_only(args, model_path: str, opt_level: str):
             pose[:3, -1] *= scene_scale
             if opt_mode == "native":
                 with autocast():
-                    image = render_image(mip_net, prop_net, pose[:-1, :], r_c, test_focal, near_t, far_t, 128, white_bkg = use_white_bkg)
+                    result = render_image(mip_net, prop_net, pose[:-1, :], r_c, test_focal, near_t, far_t, 128, white_bkg = use_white_bkg)
             else:
-                image = render_image(mip_net, prop_net, pose[:-1, :], r_c, test_focal, near_t, far_t, 128, white_bkg = use_white_bkg)
-            save_image(image, "./output/sphere/result_%03d.png"%(i), nrow = 1)
+                result = render_image(mip_net, prop_net, pose[:-1, :], r_c, test_focal, near_t, far_t, 128, white_bkg = use_white_bkg)
+            save_image(result["rgb"], "./output/sphere/result_%03d.png"%(i), nrow = 1)
 
 def get_parser():
     parser = argparse.ArgumentParser()
@@ -138,7 +155,7 @@ def get_parser():
     parser.add_argument("--decay_step", type = int, default = 100000, help = "After <decay step>, lr = lr * <decay_rate>")
     parser.add_argument("--warmup_step", type = int, default = 500, help = "Warm up step (from lowest lr to starting lr)")
     parser.add_argument("--lr", type = float, default = 1.1e-4, help = "Start lr")
-    # bool options
+    # short bool options
     parser.add_argument("-d", "--del_dir", default = False, action = "store_true", help = "Delete dir ./logs and start new tensorboard records")
     parser.add_argument("-l", "--load", default = False, action = "store_true", help = "Load checkpoint or trained model.")
     parser.add_argument("-s", "--use_scaler", default = False, action = "store_true", help = "Use AMP scaler to speed up")
@@ -147,5 +164,7 @@ def get_parser():
     parser.add_argument("-r", "--do_render", default = False, action = "store_true", help = "Only render the result")
     parser.add_argument("-w", "--white_bkg", default = False, action = "store_true", help = "Output white background")
     parser.add_argument("-t", "--ref_nerf", default = False, action = "store_true", help = "Test Ref NeRF")
+    # long bool options
+    parser.add_argument("--render_depth", default = False, action = "store_true", help = "Render depth image")
 
     return parser

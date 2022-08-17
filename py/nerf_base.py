@@ -7,6 +7,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
+from typing import Optional, Tuple
 
 # This module is shared by coarse and fine network, with no need to modify
 class NeRF(nn.Module):
@@ -55,7 +56,6 @@ class NeRF(nn.Module):
     @staticmethod
     def getNormedWeight(opacity:torch.Tensor, depth:torch.Tensor, density_act = F.relu) -> torch.Tensor:
         delta:torch.Tensor = torch.cat((depth[:, 1:] - depth[:, :-1], torch.FloatTensor([1e10]).repeat((depth.shape[0], 1)).cuda()), dim = -1)
-        # print(opacity.shape, depth[:, 1:].shape, raw_delta.shape, delta.shape)
         mult:torch.Tensor = torch.exp(-density_act(opacity) * delta)
         alpha:torch.Tensor = 1. - mult
         # fusion requires normalization, rgb output should be passed through sigmoid
@@ -65,7 +65,12 @@ class NeRF(nn.Module):
     # depth shape: (ray_num, point_num)
     # need the norm of rays, shape: (ray_num, point_num)
     @staticmethod
-    def render(rgbo:torch.Tensor, depth:torch.Tensor, ray_dirs:torch.Tensor, mul_norm:bool = True, white_bkg:bool = False, density_act = F.relu) -> torch.Tensor:
+    def render(
+        rgbo:torch.Tensor, depth:torch.Tensor, 
+        ray_dirs:torch.Tensor, mul_norm:bool = True, 
+        white_bkg:bool = False, density_act = F.relu, 
+        render_depth: Optional[Tuple[float, float]] = None, normal_info: Optional[Tuple] = None
+    ) -> torch.Tensor:
         if mul_norm == True:
             depth = depth * (ray_dirs.norm(dim = -1, keepdim = True))
         rgb:torch.Tensor = rgbo[..., :3] # shape (ray_num, pnum, 3)
@@ -75,7 +80,14 @@ class NeRF(nn.Module):
         if white_bkg:
             acc_map = torch.sum(weights, -1)
             rgb = rgb + (1.-acc_map[...,None])
-        return rgb, weights     # output (ray_num, 3) and (ray_num, point_num)
+        extras = dict()
+        if render_depth is not None:
+            near, far = render_depth
+            extras["depth_img"] = (torch.sum(weights * depth, dim = -1) - near) / (far - near)
+        if normal_info is not None:
+            normal, cam_dir = normal_info       # (..., 3), shape (3, 1)
+            extras["normal_img"] = (torch.sum(weights * (normal @ cam_dir), dim = -1) + 1.) * 0.5
+        return rgb, weights, extras     # output (ray_num, 3) and (ray_num, point_num)
 
 class DecayLrScheduler:
     def __init__(self, min_r, decay_r, step, lr, warmup_step = 0):

@@ -89,6 +89,7 @@ class RefNeRF(NeRF):
         ray_d = pts[..., 3:] if ray_d is None else ray_d
         reflect_r = ray_d - 2. * torch.sum(ray_d * normal, dim = -1, keepdim = True) * normal
         wr_ide = self.integrated_dir_enc(reflect_r, roughness)
+        # wr_ide = torch.cat((ray_d))
         nv_dot = torch.sum(normal * ray_d, dim = -1, keepdim = True)     # normal dot (-view_dir)
 
         all_inputs = torch.cat((spa_info_b, wr_ide, nv_dot), dim = -1)
@@ -98,10 +99,10 @@ class RefNeRF(NeRF):
         specular_rgb = self.spec_rgb_head(self.dir_block2(all_inputs)) * F.sigmoid(spec_tint) 
         if self.use_srgb == True:
             diffuse_rgb = torch.sigmoid(diffuse_rgb - log(3.))
-            rgb = torch.clip(linear_to_srgb(specular_rgb + diffuse_rgb), 0.0, 1.0)
+            rgb = linear_to_srgb(specular_rgb + diffuse_rgb)
         else:
             diffuse_rgb = torch.sigmoid(diffuse_rgb)
-            rgb = torch.clip(specular_rgb + diffuse_rgb, 0.0, 1.0)
+            rgb = specular_rgb + diffuse_rgb
         return torch.cat((rgb, density), dim = -1), normal      # output (ray_num, point_num, 4) + (ray_num, point_num, 3)
 
 class WeightedNormalLoss(nn.Module):
@@ -111,8 +112,7 @@ class WeightedNormalLoss(nn.Module):
     
     # weight (ray_num, point_num)
     def forward(self, weight:torch.Tensor, d_norm: torch.Tensor, p_norm: torch.Tensor) -> torch.Tensor:
-        dot_diff = 1. - torch.sum(d_norm * p_norm, dim = -1)
-        # norm_diff = torch.pow((d_norm - p_norm), 2)
+        dot_diff = 1. - torch.sum(d_norm.detach() * p_norm, dim = -1)
         return torch.mean(weight * dot_diff) if self.size_average == True else torch.sum(weight * dot_diff)
 
 class BackFaceLoss(nn.Module):
