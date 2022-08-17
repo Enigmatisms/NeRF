@@ -81,9 +81,10 @@ class RefNeRF(NeRF):
         roughness, density = self.rho_tau_head(intermediate).split((1, 1), dim = -1)
         roughness = F.softplus(roughness - 1.)
         spa_info_b = self.bottle_neck(intermediate)
-        spa_info_b = spa_info_b + torch.normal(0, self.perturb_bottle_neck_w, spa_info_b.shape, device = spa_info_b.device)
+        if self.training == True:
+            spa_info_b = spa_info_b + torch.normal(0, self.perturb_bottle_neck_w, spa_info_b.shape, device = spa_info_b.device)
 
-        normal = -normal / (normal.norm(dim = -1, keepdim = True) + 1e-6)
+        normal = -normal / (normal.norm(dim = -1, keepdim = True) + 1e-7)
         # needs further validation
         ray_d = pts[..., 3:] if ray_d is None else ray_d
         reflect_r = ray_d - 2. * torch.sum(ray_d * normal, dim = -1, keepdim = True) * normal

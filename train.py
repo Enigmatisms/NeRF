@@ -65,7 +65,7 @@ def main(args):
         from py.ref_model import RefNeRF, WeightedNormalLoss, BackFaceLoss
         normal_loss_func = WeightedNormalLoss(True)
         bf_loss_func = BackFaceLoss() 
-        mip_net = RefNeRF(16, args.ide_level, hidden_unit = 256, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
+        mip_net = RefNeRF(10, args.ide_level, hidden_unit = 256, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
     else:
         from py.mip_model import MipNeRF
         mip_net = MipNeRF(10, 4, hidden_unit = 256)
@@ -150,7 +150,7 @@ def main(args):
             def run(position_grad = False):
                 density = prop_net.forward(coarse_samples[..., :3])
                 prop_weights_raw = ProposalNetwork.get_weights(density, coarse_lengths, coarse_cam_rays[:, 3:])      # (ray_num, num of proposal interval)
-                prop_weights = maxBlurFilter(prop_weights_raw, 0.01)
+                prop_weights = maxBlurFilter(prop_weights_raw, 0.03)
 
                 fine_lengths, sort_inds, below_idxs = inverseSample(prop_weights, coarse_lengths, fine_sample_pnum + 1, sort = True)
                 fine_lengths = fine_lengths[..., :-1]
@@ -178,7 +178,7 @@ def main(args):
                 img_loss:torch.Tensor = loss_func(fine_rendered, rgb_targets)                                           # stop the gradient of NeRF MLP 
 
                 prop_loss:torch.Tensor = prop_loss_func(weight_bounds, weights.detach())                # stop the gradient of NeRF MLP 
-                loss:torch.Tensor = prop_loss + img_loss + 3e-4 * normal_loss + 0.1 * bf_loss           # + 0.01 * reg_loss_func(weights, fine_lengths)
+                loss:torch.Tensor = prop_loss + img_loss + 5e-4 * normal_loss + 0.2 * bf_loss           # + 0.01 * reg_loss_func(weights, fine_lengths)
                 return loss, img_loss
             if use_amp:
                 if opt_mode == "native":
@@ -257,7 +257,7 @@ if __name__ == "__main__":
     parser.add_argument("--opt_mode", type = str, default = "O1", help = "Optimization mode: none, native (torch amp), O1, O2 (apex amp)")
 
     parser.add_argument("--ide_level", type = int, default = 4, help = "Max level of spherical harmonics to be used")
-    parser.add_argument("--bottle_neck_noise", type = float, default = 0.1, help = "Noise std for perturbing bottle_neck vector")
+    parser.add_argument("--bottle_neck_noise", type = float, default = 0.02, help = "Noise std for perturbing bottle_neck vector")
     parser.add_argument("-u", "--use_srgb", default = False, action = "store_true", help = "Whether to use srgb in the output or not")
 
     args = parser.parse_args()      # spherical rendering is disabled (for now)
