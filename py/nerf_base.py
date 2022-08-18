@@ -49,6 +49,23 @@ class NeRF(nn.Module):
         pts = rays[...,None,:3] + rays[...,None,3:] * f_zvals[...,:,None] 
         return torch.cat((pts, rays[:, 3:].unsqueeze(-2).repeat(1, sample_pnum, 1)), dim = -1)                 # output is (ray_num, coarse_pts num + fine pts num, 6)
 
+    @staticmethod
+    def coarseFineMerge(rays:torch.Tensor, c_zvals:torch.Tensor, f_zvals:torch.Tensor, f_inds: Optional[torch.Tensor] = None) -> torch.Tensor:
+        zvals = torch.cat((f_zvals, c_zvals), dim = -1)
+        zvals, sort_inds = torch.sort(zvals, dim = -1)
+        if f_inds is not None:
+            c_inds = torch.arange(c_zvals.shape[-1], device = zvals.device).unsqueeze(0).expand(c_zvals.shape[0], -1)
+            all_inds = torch.cat((f_inds, c_inds), dim = -1)
+            all_inds = torch.gather(all_inds, -1, sort_inds)
+        zvals = zvals[..., :-1]
+        sample_pnum = zvals.shape[-1]
+        # Use sort depth to calculate sampled points
+        pts = rays[...,None,:3] + rays[...,None,3:] * zvals[...,:,None] 
+        result_samples = torch.cat((pts, rays[:, 3:].unsqueeze(-2).expand(-1, sample_pnum, -1)), dim = -1)
+        if f_inds is not None:
+            return result_samples, zvals, all_inds          # output is (ray_num, coarse_pts num + fine pts num, 6)
+        return result_samples, zvals,
+
     """
         This function is important for inverse transform sampling, since for every ray
         we will have 64 normalized weights (summing to 1.) for inverse sampling

@@ -62,9 +62,9 @@ def render_image(
             density = prop_net.forward(pts)
             prop_weights_raw = ProposalNetwork.get_weights(density, sampled_lengths, camera_rays[:, 3:])      # (ray_num, num of proposal interval)
             prop_weights = maxBlurFilter(prop_weights_raw, 0.01)
-            fine_lengths, _, _ = inverseSample(prop_weights, sampled_lengths, sample_num + 1, sort = True)
-            fine_lengths = fine_lengths[..., :-1]
-            fine_samples = NeRF.length2pts(camera_rays, fine_lengths)
+            fine_lengths, _ = inverseSample(prop_weights, sampled_lengths, sample_num + 1, sort = True)
+            fine_samples, fine_lengths = NeRF.coarseFineMerge(camera_rays, sampled_lengths, fine_lengths)
+            # fine_samples = NeRF.length2pts(camera_rays, fine_lengths)
             output_rgbo = network.forward(fine_samples)
             if is_ref_model == True:
                 output_rgbo, normal = output_rgbo
@@ -135,11 +135,11 @@ def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type = int, default = 2000, help = "Training lasts for . epochs")
     parser.add_argument("--sample_ray_num", type = int, default = 1024, help = "<x> rays to sample per training time")
-    parser.add_argument("--coarse_sample_pnum", type = int, default = 80, help = "Points to sample in coarse net")
-    parser.add_argument("--fine_sample_pnum", type = int, default = 160, help = "Points to sample in fine net")
+    parser.add_argument("--coarse_sample_pnum", type = int, default = 64, help = "Points to sample in coarse net")
+    parser.add_argument("--fine_sample_pnum", type = int, default = 128, help = "Points to sample in fine net")
     parser.add_argument("--eval_time", type = int, default = 5, help = "Tensorboard output interval (train time)")
     parser.add_argument("--output_time", type = int, default = 20, help = "Image output interval (train time)")
-    parser.add_argument("--center_crop_iter", type = int, default = 1000, help = "Produce center")
+    parser.add_argument("--center_crop_iter", type = int, default = 0, help = "Produce center")
     parser.add_argument("--near", type = float, default = 2., help = "Nearest sample depth")
     parser.add_argument("--far", type = float, default = 6., help = "Farthest sample depth")
     parser.add_argument("--center_crop_x", type = float, default = 0.5, help = "Center crop x axis ratio")
@@ -154,7 +154,7 @@ def get_parser():
     parser.add_argument("--decay_rate", type = float, default = 0.1, help = "After <decay step>, lr = lr * <decay_rate>")
     parser.add_argument("--decay_step", type = int, default = 100000, help = "After <decay step>, lr = lr * <decay_rate>")
     parser.add_argument("--warmup_step", type = int, default = 500, help = "Warm up step (from lowest lr to starting lr)")
-    parser.add_argument("--lr", type = float, default = 1.1e-4, help = "Start lr")
+    parser.add_argument("--lr", type = float, default = 1.8e-4, help = "Start lr")
     # short bool options
     parser.add_argument("-d", "--del_dir", default = False, action = "store_true", help = "Delete dir ./logs and start new tensorboard records")
     parser.add_argument("-l", "--load", default = False, action = "store_true", help = "Load checkpoint or trained model.")

@@ -40,7 +40,7 @@ def inverseSample(weights:torch.Tensor, coarse_depth:torch.Tensor, sample_pnum:i
     # idxs is the lower and upper indices of inverse sampling intervals, which is of shape (ray_num, sample_num, 2)
     if sort:
         z_samples, sort_inds = torch.sort(z_samples, dim = -1)
-        return z_samples, sort_inds, idxs          # depth is used for rendering
+        return z_samples, torch.gather(idxs, -1, sort_inds)          # depth is used for rendering
     return z_samples
 
 # input (all training images, center_crop ratio)

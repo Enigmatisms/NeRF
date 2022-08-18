@@ -155,9 +155,8 @@ def main(args):
                 prop_weights_raw = ProposalNetwork.get_weights(density, coarse_lengths, coarse_cam_rays[:, 3:])      # (ray_num, num of proposal interval)
                 prop_weights = maxBlurFilter(prop_weights_raw, 0.03)
 
-                fine_lengths, sort_inds, below_idxs = inverseSample(prop_weights, coarse_lengths, fine_sample_pnum + 1, sort = True)
-                fine_lengths = fine_lengths[..., :-1]
-                fine_samples = NeRF.length2pts(coarse_cam_rays, fine_lengths)
+                fine_lengths, below_idxs = inverseSample(prop_weights, coarse_lengths, fine_sample_pnum + 1, sort = True)
+                fine_samples, fine_lengths, below_idxs = NeRF.coarseFineMerge(coarse_cam_rays, coarse_lengths, fine_lengths, below_idxs)
                 normal_loss = bf_loss = 0.
 
                 if position_grad == True:
@@ -176,7 +175,7 @@ def main(args):
                 else:
                     fine_rgbo = mip_net.forward(fine_samples)
                     fine_rendered, weights, _ = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])
-                weight_bounds:torch.Tensor = getBounds(prop_weights, below_idxs, sort_inds)             # output shape: (ray_num, num of conical frustum)
+                weight_bounds:torch.Tensor = getBounds(prop_weights, below_idxs)             # output shape: (ray_num, num of conical frustum)
                 opt.zero_grad()
                 img_loss:torch.Tensor = loss_func(fine_rendered, rgb_targets)                                           # stop the gradient of NeRF MLP 
 
@@ -218,7 +217,7 @@ def main(args):
                 writer.add_scalar('PSNR', psnr, train_cnt)
             train_cnt += 1
 
-        if ((ep % output_time == 0) or ep == epochs - 1):
+        if ((ep % output_time == 0) or ep == epochs - 1) and ep > ep_start:
             mip_net.eval()
             prop_net.eval()
             with torch.no_grad():

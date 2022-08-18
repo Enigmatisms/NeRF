@@ -112,7 +112,7 @@ class WeightedNormalLoss(nn.Module):
     
     # weight (ray_num, point_num)
     def forward(self, weight:torch.Tensor, d_norm: torch.Tensor, p_norm: torch.Tensor) -> torch.Tensor:
-        dot_diff = 1. - torch.sum(d_norm.detach() * p_norm, dim = -1)
+        dot_diff = 1. - torch.sum(d_norm * p_norm, dim = -1)
         return torch.mean(weight * dot_diff) if self.size_average == True else torch.sum(weight * dot_diff)
 
 class BackFaceLoss(nn.Module):
