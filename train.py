@@ -14,10 +14,9 @@ from py.nerf_base import DecayLrScheduler, NeRF
 from py.dataset import CustomDataSet, AdaptiveResize
 from torchvision.utils import save_image
 from py.nerf_helper import nan_hook, saveModel
-from py.mip_methods import maxBlurFilter
 from py.procedures import render_image, get_parser, render_only
 from py.utils import fov2Focal, getSummaryWriter, validSampler, randomFromOneImage, inverseSample
-from py.addtional import getBounds, ProposalLoss, ProposalNetwork, SoftL1Loss, LossPSNR
+from py.addtional import SoftL1Loss, LossPSNR
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.cuda.amp import autocast as autocast
 from py.ref_model import RefNeRF, WeightedNormalLoss, BackFaceLoss
@@ -37,8 +36,8 @@ def main(args):
 
     eval_time           = args.eval_time
     dataset_name        = args.dataset_name
-    load_path_mip       = default_chkpt_path + args.name + "_mip.pt"
-    load_path_prop      = default_chkpt_path + args.name + "_prop.pt"
+    load_path_fine       = default_chkpt_path + args.name + "_fine.pt"
+    load_path_coarse      = default_chkpt_path + args.name + "_coarse.pt"
     # Bool options
     del_dir             = args.del_dir
     use_load            = args.load
@@ -71,13 +70,14 @@ def main(args):
     fine_net = RefNeRF(10, args.ide_level, hidden_unit = 256, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
 
     if debugging:
-        for submodule in mip_net.modules():
+        for submodule in fine_net.modules():
+            submodule.register_forward_hook(nan_hook)
+        for submodule in coarse_net.modules():
             submodule.register_forward_hook(nan_hook)
         torch.autograd.set_detect_anomaly(True)
 
     # ======= Loss function ==========
     loss_func = SoftL1Loss()
-    prop_loss_func = ProposalLoss().cuda()
     mse2psnr = LossPSNR()
     # ======= Optimizer and scheduler ========
 
@@ -100,7 +100,7 @@ def main(args):
     test_focal = fov2Focal(cam_fov_test, r_c)
     print("Training focal: (%f, %f), image size: (w: %d, h: %d)"%(train_focal[0], train_focal[1], r_c[1], r_c[0]))
 
-    grad_vars = list(mip_net.parameters()) + list(prop_net.parameters())
+    grad_vars = list(coarse_net.parameters()) + list(fine_net.parameters())
     opt = optim.Adam(params = grad_vars, lr = actual_lr, betas=(0.9, 0.999))
     def grad_clip_func(parameters, grad_clip):
         if grad_clip > 0.:
@@ -108,14 +108,14 @@ def main(args):
 
     if use_amp:
         if opt_mode.lower() != "native":
-            [mip_net, prop_net], opt = amp.initialize([mip_net, prop_net], opt, opt_level=opt_mode)
+            [coarse_net, fine_net], opt = amp.initialize([coarse_net, fine_net], opt, opt_level=opt_mode)
         else:
             scaler = GradScaler()
-    if use_load == True and os.path.exists(load_path_mip) and os.path.exists(load_path_prop):
-        train_cnt, ep_start = mip_net.loadFromFile(load_path_mip, use_amp and opt_mode != "native", opt, ["train_cnt", "epoch"])
-        prop_net.loadFromFile(load_path_prop, use_amp and opt_mode != "native")
+    if use_load == True and os.path.exists(load_path_fine) and os.path.exists(load_path_coarse):
+        train_cnt, ep_start = fine_net.loadFromFile(load_path_fine, use_amp and opt_mode != "native", opt, ["train_cnt", "epoch"])
+        coarse_net.loadFromFile(load_path_coarse, use_amp and opt_mode != "native")
     else:
-        print("Not loading or load path '%s' / '%s' does not exist."%(load_path_mip, load_path_prop))
+        print("Not loading or load path '%s' / '%s' does not exist."%(load_path_fine, load_path_coarse))
     lr_sch = DecayLrScheduler(args.min_ratio, args.decay_rate, args.decay_step, actual_lr, args.warmup_step)
 
     test_views = []
@@ -147,9 +147,6 @@ def main(args):
             )
             opt.zero_grad()
             def run(net, sample_pts, sample_zs, target_rgb):
-                # fine_lengths, sort_inds, below_idxs = inverseSample(prop_weights, coarse_lengths, fine_sample_pnum + 1, sort = True)
-                # fine_lengths = fine_lengths[..., :-1]
-                # fine_samples = NeRF.length2pts(coarse_cam_rays, fine_lengths)
                 normal_loss = bf_loss = 0.
 
                 pt_pos, pt_dir = sample_pts.split((3, 3), dim = -1)
@@ -161,7 +158,7 @@ def main(args):
                 )
                 density_grad = density_grad / density_grad.norm(dim = -1, keepdim = True)
                 rgbo[..., -1] = F.softplus(rgbo[..., -1] + 0.5)
-                fine_rendered, weights, _ = NeRF.render(rgbo, sample_zs, coarse_cam_rays[:, 3:], mip_net.density_act)
+                fine_rendered, weights, _ = NeRF.render(rgbo, sample_zs, coarse_cam_rays[:, 3:], net.density_act)
                 normal_loss = normal_loss_func(weights, density_grad, pred_normal)
                 bf_loss = bf_loss_func(weights, pred_normal, pt_dir)
 
@@ -170,29 +167,25 @@ def main(args):
                 loss:torch.Tensor = img_loss + 5e-4 * normal_loss + 0.2 * bf_loss           # + 0.01 * reg_loss_func(weights, fine_lengths)
                 return loss, img_loss, weights
             coarse_loss, _, coarse_weights = run(coarse_net, coarse_samples, coarse_lengths, rgb_targets)
-            fine_lengths, sort_inds, below_idxs = inverseSample(coarse_weights, coarse_lengths, fine_sample_pnum + 1, sort = True)
-            fine_lengths = fine_lengths[..., :-1]
-            # TODO： 点的数量（由于mip有加减1机制，需要查看）。此外，此处应该用coarse fine merge
-            fine_samples = NeRF.length2pts(coarse_cam_rays, fine_lengths)
-            fine_loss, fine_img_loss, coarse_weights = run(coarse_net, coarse_samples, coarse_lengths, rgb_targets)
+            fine_lengths = inverseSample(coarse_weights, coarse_lengths, fine_sample_pnum, sort = False)
+            fine_samples, fine_lengths = NeRF.coarseFineMerge(coarse_cam_rays, coarse_lengths, fine_lengths)
+            fine_loss, fine_img_loss, _ = run(fine_net, fine_samples, fine_lengths, rgb_targets)
+            loss = fine_loss + coarse_loss
             # output 
 
             if use_amp:
                 if opt_mode == "native":
                     with autocast():
-                        loss, img_loss = run(use_ref_nerf)
                         scaler.scale(loss).backward()
                         grad_clip_func(grad_vars, grad_clip_val)
                         scaler.step(opt)
                         scaler.update()
                 else:
-                    loss, img_loss = run(use_ref_nerf)
                     with amp.scale_loss(loss, opt) as scaled_loss:
                         scaled_loss.backward()
                     grad_clip_func(grad_vars, grad_clip_val)
                     opt.step()
             else:
-                loss, img_loss = run(use_ref_nerf)
                 loss.backward()
                 grad_clip_func(grad_vars, grad_clip_val)
                 opt.step()
@@ -203,7 +196,7 @@ def main(args):
             if train_cnt % eval_time == 1:
                 # ========= Evaluation output ========
                 remaining_cnt = (epochs - ep - 1) * train_set_len + train_set_len - i
-                psnr = mse2psnr(img_loss)
+                psnr = mse2psnr(fine_img_loss)
                 print("Traning Epoch: %4d / %4d\t Iter %4d / %4d\ttrain loss: %.4f\tPSNR: %.3lf\tlr:%.7lf\tcenter crop:%.1lf, %.1lf\tremaining train time:%s"%(
                         ep, epochs, i, train_set_len, loss.item(), psnr, new_lr, now_crop[0], now_crop[1], train_timer.remaining_time(remaining_cnt)
                 ))
@@ -213,15 +206,15 @@ def main(args):
             train_cnt += 1
 
         if ((ep % output_time == 0) or ep == epochs - 1):
-            mip_net.eval()
-            prop_net.eval()
+            coarse_net.eval()
+            fine_net.eval()
             with torch.no_grad():
                 eval_timer.tic()
                 test_results = []
                 test_loss = torch.zeros(1).cuda()
                 for test_img, test_tf in test_views:
                     test_result = render_image(
-                        mip_net, prop_net, test_tf.cuda(), r_c, test_focal, near_t, far_t, fine_sample_pnum, 
+                        coarse_net, fine_net, test_tf.cuda(), r_c, test_focal, near_t, far_t, fine_sample_pnum, 
                         white_bkg = use_white_bkg, render_depth = render_depth, render_normal = render_normal
                     )
                     for value in test_result.values():
@@ -234,20 +227,20 @@ def main(args):
                 ))
                 images_to_save = []
                 images_to_save.extend(test_results)
-                save_image(images_to_save, "./output/result_%03d.png"%(test_cnt), nrow = 3)
+                save_image(images_to_save, "./output/result_%03d.png"%(test_cnt), nrow = 2)
                 # ======== Saving checkpoints ========
-                saveModel(mip_net,  "%schkpt_%d_mip.pt"%(default_chkpt_path, train_cnt), {"train_cnt": train_cnt, "epoch": ep}, opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
-                saveModel(prop_net,  "%schkpt_%d_prop.pt"%(default_chkpt_path, train_cnt), opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
+                saveModel(fine_net,  "%schkpt_%d_fine.pt"%(default_chkpt_path, train_cnt), {"train_cnt": train_cnt, "epoch": ep}, opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
+                saveModel(coarse_net,  "%schkpt_%d_coarse.pt"%(default_chkpt_path, train_cnt), opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
                 test_cnt += 1
-            mip_net.train()
-            prop_net.train()
+            coarse_net.train()
+            fine_net.train()
         epoch_timer.toc()
         print("Epoch %4d / %4d completed\trunning time for this epoch: %.5lf\testimated remaining time: %s"
                 %(ep, epochs, epoch_timer.get_mean_time(), epoch_timer.remaining_time(epochs - ep - 1))
         )
     # ======== Saving the model ========
-    saveModel(mip_net, "%smodel_%d_mip.pth"%(default_model_path, 2), opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
-    saveModel(prop_net, "%smodel_%d_prop.pth"%(default_model_path, 2), opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
+    saveModel(fine_net, "%smodel_%d_fine.pth"%(default_model_path, 2), opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
+    saveModel(coarse_net, "%smodel_%d_coarse.pth"%(default_model_path, 2), opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
     writer.close()
     print("Output completed.")
 

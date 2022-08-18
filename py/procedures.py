@@ -6,13 +6,11 @@ import argparse
 from tqdm import tqdm
 
 from py.nerf_base import NeRF
-from py.ref_model import RefNeRF
 from torchvision import transforms
 from py.dataset import CustomDataSet, AdaptiveResize
 from py.addtional import ProposalNetwork
 from torch.nn.functional import softplus
 from torchvision.utils import save_image
-from py.mip_methods import maxBlurFilter
 from py.utils import fov2Focal, inverseSample, pose_spherical
 from collections.abc import Iterable
 from torch.cuda.amp import autocast as autocast
@@ -21,7 +19,7 @@ POSSIBLE_PATCH_SIZE = [50, 40, 60, 30]
 
 # image size is (row, col)
 def render_image(
-    network:NeRF, prop_net:ProposalNetwork, render_pose:torch.Tensor, image_size, focal,
+    c_net:NeRF, f_net:NeRF, render_pose:torch.Tensor, image_size, focal,
     near:float, far:float, sample_num:int=128, white_bkg:bool = False, render_depth = False, render_normal = False
 ) -> torch.Tensor:
     if not isinstance(image_size, Iterable):
@@ -53,26 +51,26 @@ def render_image(
             patch_num = (image_size[0] // sz, image_size[1] // sz)
             break
 
-    is_ref_model = type(network) == RefNeRF
+    def run(net, sample_pts, sample_zs):
+        # print(sample_pts.shape, sample_zs.shape)
+        rgbo, _ = net.forward(sample_pts)
+        rgbo[..., -1] = softplus(rgbo[..., -1] + 0.5)
+        fine_rendered, weights, _ = NeRF.render(rgbo, sample_zs, camera_rays[..., 3:], density_act = net.density_act, white_bkg = white_bkg)
+        return fine_rendered, weights
     for k in range(patch_num[0]):
         for j in range(patch_num[1]):
             camera_rays = torch.cat((render_pose[:, -1].expand(sz, sz, -1), ray_raw[(sz * k):(sz * (k + 1)), (sz * j):(sz * (j + 1))]), dim = -1).reshape(-1, 6)        # shape (2500, 6)
             sampled_lengths = (all_lengths + torch.rand((sz, sz, 64)).cuda() * resolution).view(-1, 64)        # shape (2500, sample_num)
             pts = render_pose[:, -1].unsqueeze(0) + sampled_lengths[..., None] * camera_rays[:, None, 3:]
-            density = prop_net.forward(pts)
-            prop_weights_raw = ProposalNetwork.get_weights(density, sampled_lengths, camera_rays[:, 3:])      # (ray_num, num of proposal interval)
-            prop_weights = maxBlurFilter(prop_weights_raw, 0.01)
-            fine_lengths, _, _ = inverseSample(prop_weights, sampled_lengths, sample_num + 1, sort = True)
-            fine_lengths = fine_lengths[..., :-1]
-            fine_samples = NeRF.length2pts(camera_rays, fine_lengths)
-            output_rgbo = network.forward(fine_samples)
-            if is_ref_model == True:
-                output_rgbo, normal = output_rgbo
-                output_rgbo[..., -1] = softplus(output_rgbo[..., -1] + 0.5)
-
+            pts = torch.cat((pts, camera_rays[..., 3:].unsqueeze(-2).expand(-1, 64, -1)), dim = -1)
+            _, weights = run(c_net, pts, sampled_lengths)
+            fine_lengths = inverseSample(weights, sampled_lengths, sample_num, sort = False)
+            fine_pts, fine_lengths = NeRF.coarseFineMerge(camera_rays, sampled_lengths, fine_lengths)
+            output_rgbo, normal = f_net.forward(fine_pts)
+            output_rgbo[..., -1] = softplus(output_rgbo[..., -1] + 0.5)
             part_image, _, extras = NeRF.render(
                 output_rgbo, fine_lengths, camera_rays[..., 3:], 
-                white_bkg = white_bkg, density_act = network.density_act, 
+                white_bkg = white_bkg, density_act = f_net.density_act, 
                 render_depth = (near, far) if render_depth else None, 
                 normal_info = (normal, render_pose[:, -2]) if render_normal else None
             )          # originally outputs (2500, 3) -> (reshape) (sz, sz, 3) -> (to image) (3, sz, sz)
@@ -135,8 +133,8 @@ def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type = int, default = 2000, help = "Training lasts for . epochs")
     parser.add_argument("--sample_ray_num", type = int, default = 1024, help = "<x> rays to sample per training time")
-    parser.add_argument("--coarse_sample_pnum", type = int, default = 80, help = "Points to sample in coarse net")
-    parser.add_argument("--fine_sample_pnum", type = int, default = 160, help = "Points to sample in fine net")
+    parser.add_argument("--coarse_sample_pnum", type = int, default = 64, help = "Points to sample in coarse net")
+    parser.add_argument("--fine_sample_pnum", type = int, default = 128, help = "Points to sample in fine net")
     parser.add_argument("--eval_time", type = int, default = 5, help = "Tensorboard output interval (train time)")
     parser.add_argument("--output_time", type = int, default = 20, help = "Image output interval (train time)")
     parser.add_argument("--center_crop_iter", type = int, default = 1000, help = "Produce center")
@@ -154,7 +152,7 @@ def get_parser():
     parser.add_argument("--decay_rate", type = float, default = 0.1, help = "After <decay step>, lr = lr * <decay_rate>")
     parser.add_argument("--decay_step", type = int, default = 100000, help = "After <decay step>, lr = lr * <decay_rate>")
     parser.add_argument("--warmup_step", type = int, default = 500, help = "Warm up step (from lowest lr to starting lr)")
-    parser.add_argument("--lr", type = float, default = 1.1e-4, help = "Start lr")
+    parser.add_argument("--lr", type = float, default = 2.6e-4, help = "Start lr")
     # short bool options
     parser.add_argument("-d", "--del_dir", default = False, action = "store_true", help = "Delete dir ./logs and start new tensorboard records")
     parser.add_argument("-l", "--load", default = False, action = "store_true", help = "Load checkpoint or trained model.")

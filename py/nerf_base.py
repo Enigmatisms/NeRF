@@ -62,6 +62,16 @@ class NeRF(nn.Module):
         weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).cuda(), mult + 1e-10], -1), -1)[:, :-1]
         return weights
 
+    @staticmethod
+    def coarseFineMerge(rays:torch.Tensor, c_zvals:torch.Tensor, f_zvals:torch.Tensor) -> torch.Tensor:
+        zvals = torch.cat((f_zvals, c_zvals), dim = -1)
+        zvals, _ = torch.sort(zvals, dim = -1)
+        sample_pnum = f_zvals.shape[1] + c_zvals.shape[1]
+        # Use sort depth to calculate sampled points
+        pts = rays[...,None,:3] + rays[...,None,3:] * zvals[...,:,None] 
+        # depth * ray_direction + origin (this should be further tested)
+        return torch.cat((pts, rays[:, 3:].unsqueeze(-2).repeat(1, sample_pnum, 1)), dim = -1), zvals          # output is (ray_num, coarse_pts num + fine pts num, 6)
+
     # depth shape: (ray_num, point_num)
     # need the norm of rays, shape: (ray_num, point_num)
     @staticmethod
