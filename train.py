@@ -227,7 +227,7 @@ def main(args):
                 ))
                 images_to_save = []
                 images_to_save.extend(test_results)
-                save_image(images_to_save, "./output/result_%03d.png"%(test_cnt), nrow = 2)
+                save_image(images_to_save, "./output/result_%03d.png"%(test_cnt), nrow = 3)
                 # ======== Saving checkpoints ========
                 saveModel(fine_net,  "%schkpt_%d_fine.pt"%(default_chkpt_path, train_cnt), {"train_cnt": train_cnt, "epoch": ep}, opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
                 saveModel(coarse_net,  "%schkpt_%d_coarse.pt"%(default_chkpt_path, train_cnt), opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
