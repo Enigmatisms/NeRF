@@ -20,6 +20,7 @@ from py.utils import fov2Focal, getSummaryWriter, validSampler, randomFromOneIma
 from py.addtional import getBounds, ProposalLoss, ProposalNetwork, SoftL1Loss, LossPSNR
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.cuda.amp import autocast as autocast
+from py.ref_model import RefNeRF, WeightedNormalLoss, BackFaceLoss
 
 default_chkpt_path = "./check_points/"
 default_model_path = "./model/"
@@ -64,15 +65,10 @@ def main(args):
     
     # ======= instantiate model =====
     # NOTE: model is recommended to have loadFromFile method
-    if use_ref_nerf:
-        from py.ref_model import RefNeRF, WeightedNormalLoss, BackFaceLoss
-        normal_loss_func = WeightedNormalLoss(True)
-        bf_loss_func = BackFaceLoss() 
-        mip_net = RefNeRF(10, args.ide_level, hidden_unit = 256, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
-    else:
-        from py.mip_model import MipNeRF
-        mip_net = MipNeRF(10, 4, hidden_unit = 256)
-    prop_net = ProposalNetwork(10, hidden_unit = 256).cuda()
+    normal_loss_func = WeightedNormalLoss(True)
+    bf_loss_func = BackFaceLoss() 
+    coarse_net = RefNeRF(10, args.ide_level, hidden_unit = 256, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
+    fine_net = RefNeRF(10, args.ide_level, hidden_unit = 256, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
 
     if debugging:
         for submodule in mip_net.modules():
@@ -149,40 +145,38 @@ def main(args):
             coarse_samples, coarse_lengths, rgb_targets, coarse_cam_rays = validSampler(
                 valid_pixels, valid_coords, train_tf, sample_ray_num, coarse_sample_pnum, train_focal, near_t, far_t, True
             )
-            # output 
-            def run(position_grad = False):
-                density = prop_net.forward(coarse_samples[..., :3])
-                prop_weights_raw = ProposalNetwork.get_weights(density, coarse_lengths, coarse_cam_rays[:, 3:])      # (ray_num, num of proposal interval)
-                prop_weights = maxBlurFilter(prop_weights_raw, 0.03)
-
-                fine_lengths, sort_inds, below_idxs = inverseSample(prop_weights, coarse_lengths, fine_sample_pnum + 1, sort = True)
-                fine_lengths = fine_lengths[..., :-1]
-                fine_samples = NeRF.length2pts(coarse_cam_rays, fine_lengths)
+            opt.zero_grad()
+            def run(net, sample_pts, sample_zs, target_rgb):
+                # fine_lengths, sort_inds, below_idxs = inverseSample(prop_weights, coarse_lengths, fine_sample_pnum + 1, sort = True)
+                # fine_lengths = fine_lengths[..., :-1]
+                # fine_samples = NeRF.length2pts(coarse_cam_rays, fine_lengths)
                 normal_loss = bf_loss = 0.
 
-                if position_grad == True:
-                    fine_pos, fine_dir = fine_samples.split((3, 3), dim = -1)
-                    fine_pos.requires_grad = True
-                    fine_rgbo, pred_normal = mip_net.forward(fine_pos, fine_dir)
-                    r_num, p_num, _ = fine_rgbo.shape
-                    density_grad, = torch.autograd.grad(fine_rgbo[..., -1], fine_pos, 
-                        torch.ones(r_num, p_num, device = fine_rgbo.device), retain_graph = True
-                    )
-                    density_grad = density_grad / density_grad.norm(dim = -1, keepdim = True)
-                    fine_rgbo[..., -1] = F.softplus(fine_rgbo[..., -1] + 0.5)
-                    fine_rendered, weights, _ = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:], mip_net.density_act)
-                    normal_loss = normal_loss_func(weights, density_grad, pred_normal)
-                    bf_loss = bf_loss_func(weights, pred_normal, fine_dir)
-                else:
-                    fine_rgbo = mip_net.forward(fine_samples)
-                    fine_rendered, weights, _ = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])
-                weight_bounds:torch.Tensor = getBounds(prop_weights, below_idxs, sort_inds)             # output shape: (ray_num, num of conical frustum)
-                opt.zero_grad()
-                img_loss:torch.Tensor = loss_func(fine_rendered, rgb_targets)                                           # stop the gradient of NeRF MLP 
+                pt_pos, pt_dir = sample_pts.split((3, 3), dim = -1)
+                pt_pos.requires_grad = True
+                rgbo, pred_normal = net.forward(pt_pos, pt_dir)
+                r_num, p_num, _ = rgbo.shape
+                density_grad, = torch.autograd.grad(rgbo[..., -1], pt_pos, 
+                    torch.ones(r_num, p_num, device = rgbo.device), retain_graph = True
+                )
+                density_grad = density_grad / density_grad.norm(dim = -1, keepdim = True)
+                rgbo[..., -1] = F.softplus(rgbo[..., -1] + 0.5)
+                fine_rendered, weights, _ = NeRF.render(rgbo, sample_zs, coarse_cam_rays[:, 3:], mip_net.density_act)
+                normal_loss = normal_loss_func(weights, density_grad, pred_normal)
+                bf_loss = bf_loss_func(weights, pred_normal, pt_dir)
 
-                prop_loss:torch.Tensor = prop_loss_func(weight_bounds, weights.detach())                # stop the gradient of NeRF MLP 
-                loss:torch.Tensor = prop_loss + img_loss + 5e-4 * normal_loss + 0.2 * bf_loss           # + 0.01 * reg_loss_func(weights, fine_lengths)
-                return loss, img_loss
+                img_loss:torch.Tensor = loss_func(fine_rendered, target_rgb)                                           # stop the gradient of NeRF MLP 
+
+                loss:torch.Tensor = img_loss + 5e-4 * normal_loss + 0.2 * bf_loss           # + 0.01 * reg_loss_func(weights, fine_lengths)
+                return loss, img_loss, weights
+            coarse_loss, _, coarse_weights = run(coarse_net, coarse_samples, coarse_lengths, rgb_targets)
+            fine_lengths, sort_inds, below_idxs = inverseSample(coarse_weights, coarse_lengths, fine_sample_pnum + 1, sort = True)
+            fine_lengths = fine_lengths[..., :-1]
+            # TODO： 点的数量（由于mip有加减1机制，需要查看）。此外，此处应该用coarse fine merge
+            fine_samples = NeRF.length2pts(coarse_cam_rays, fine_lengths)
+            fine_loss, fine_img_loss, coarse_weights = run(coarse_net, coarse_samples, coarse_lengths, rgb_targets)
+            # output 
+
             if use_amp:
                 if opt_mode == "native":
                     with autocast():
