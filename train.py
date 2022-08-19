@@ -72,7 +72,7 @@ def main(args):
         mip_net = RefNeRF(10, args.ide_level, hidden_unit = 256, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
     else:
         from py.mip_model import MipNeRF
-        mip_net = MipNeRF(10, 4, hidden_unit = 256)
+        mip_net = MipNeRF(10, 4, hidden_unit = 256).cuda()
     prop_net = ProposalNetwork(10, hidden_unit = 256).cuda()
 
     if debugging:
@@ -174,6 +174,7 @@ def main(args):
                     normal_loss = normal_loss_func(weights, density_grad, pred_normal)
                     bf_loss = bf_loss_func(weights, pred_normal, fine_dir)
                 else:
+                    fine_lengths = fine_lengths[..., :-1]
                     fine_samples = NeRF.length2pts(coarse_cam_rays, fine_lengths)
                     fine_rgbo = mip_net.forward(fine_samples)
                     fine_rendered, weights, _ = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])

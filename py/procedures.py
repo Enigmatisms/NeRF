@@ -72,6 +72,7 @@ def render_image(
                 output_rgbo, normal = network.forward(fine_samples)
                 output_rgbo[..., -1] = softplus(output_rgbo[..., -1] + 0.5)
             else:
+                fine_lengths = fine_lengths[..., :-1]
                 fine_samples = NeRF.length2pts(camera_rays, fine_lengths)
                 output_rgbo = network.forward(fine_samples)
 
@@ -172,7 +173,7 @@ def get_parser():
     parser.add_argument("--decay_rate", type = float, default = 0.1, help = "After <decay step>, lr = lr * <decay_rate>")
     parser.add_argument("--decay_step", type = int, default = 100000, help = "After <decay step>, lr = lr * <decay_rate>")
     parser.add_argument("--warmup_step", type = int, default = 500, help = "Warm up step (from lowest lr to starting lr)")
-    parser.add_argument("--lr", type = float, default = 5.0e-4, help = "Start lr")
+    parser.add_argument("--lr", type = float, default = 2.5e-4, help = "Start lr")
     # short bool options
     parser.add_argument("-d", "--del_dir", default = False, action = "store_true", help = "Delete dir ./logs and start new tensorboard records")
     parser.add_argument("-l", "--load", default = False, action = "store_true", help = "Load checkpoint or trained model.")

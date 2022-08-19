@@ -40,6 +40,7 @@ class MipNeRF(NeRF):
     # for coarse network, input is obtained by sampling, sampling result is (ray_num, point_num, 9), (depth) (ray_num, point_num)
     def forward(self, pts:torch.Tensor) -> torch.Tensor:
         position_dim, direction_dim = 6 * self.position_flevel, 6 * self.direction_flevel
+        encoded_x = positional_encoding(pts[:, :, :3], self.position_flevel)
         rotation = pts[:, :, 3:6].reshape(-1, 3)
         rotation = rotation / rotation.norm(dim = -1, keepdim = True)
         encoded_r = positional_encoding(rotation, self.direction_flevel)
