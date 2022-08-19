@@ -52,6 +52,7 @@ def main(args):
     grad_clip_val       = args.grad_clip
     render_depth        = args.render_depth
     render_normal       = args.render_normal
+    prop_normal         = args.prop_normal
     actual_lr           = args.lr * sample_ray_num / 512        # bigger batch -> higher lr (linearity)
     train_cnt, ep_start = None, None
 
@@ -150,37 +151,38 @@ def main(args):
                 valid_pixels, valid_coords, train_tf, sample_ray_num, coarse_sample_pnum, train_focal, near_t, far_t, True
             )
             # output 
-            def run(position_grad = False):
-                density = prop_net.forward(coarse_samples[..., :3])
+            def run(is_ref_model = False):
+                coarse_samples.requires_grad = prop_normal                  
+                density = prop_net.forward(coarse_samples)
                 prop_weights_raw = ProposalNetwork.get_weights(density, coarse_lengths, coarse_cam_rays[:, 3:])      # (ray_num, num of proposal interval)
                 prop_weights = maxBlurFilter(prop_weights_raw, 0.03)
 
+                coarse_normal_loss = normal_loss = bf_loss = 0.
                 fine_lengths, below_idxs = inverseSample(prop_weights, coarse_lengths, fine_sample_pnum + 1, sort = True)
-                fine_samples, fine_lengths, below_idxs = NeRF.coarseFineMerge(coarse_cam_rays, coarse_lengths, fine_lengths, below_idxs)
-                normal_loss = bf_loss = 0.
-
-                if position_grad == True:
+                if is_ref_model == True:
+                    fine_samples, fine_lengths, below_idxs, sort_ids = NeRF.coarseFineMerge(coarse_cam_rays, coarse_lengths, fine_lengths, below_idxs)
                     fine_pos, fine_dir = fine_samples.split((3, 3), dim = -1)
                     fine_pos.requires_grad = True
                     fine_rgbo, pred_normal = mip_net.forward(fine_pos, fine_dir)
-                    r_num, p_num, _ = fine_rgbo.shape
-                    density_grad, = torch.autograd.grad(fine_rgbo[..., -1], fine_pos, 
-                        torch.ones(r_num, p_num, device = fine_rgbo.device), retain_graph = True
-                    )
-                    density_grad = density_grad / density_grad.norm(dim = -1, keepdim = True)
+                    density_grad = -RefNeRF.get_grad(fine_rgbo[..., -1], fine_pos)
+                    if prop_normal == True:
+                        coarse_grad = -RefNeRF.get_grad(density, coarse_samples)
+                        coarse_pt_fine_grad = RefNeRF.coarse_grad_select(density_grad, sort_ids, coarse_sample_pnum)
+                        coarse_normal_loss = normal_loss_func(weights, coarse_pt_fine_grad.detach(), coarse_grad)
                     fine_rgbo[..., -1] = F.softplus(fine_rgbo[..., -1] + 0.5)
                     fine_rendered, weights, _ = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:], mip_net.density_act)
                     normal_loss = normal_loss_func(weights, density_grad, pred_normal)
                     bf_loss = bf_loss_func(weights, pred_normal, fine_dir)
                 else:
+                    fine_samples = NeRF.length2pts(coarse_cam_rays, fine_lengths)
                     fine_rgbo = mip_net.forward(fine_samples)
                     fine_rendered, weights, _ = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])
                 weight_bounds:torch.Tensor = getBounds(prop_weights, below_idxs)             # output shape: (ray_num, num of conical frustum)
                 opt.zero_grad()
-                img_loss:torch.Tensor = loss_func(fine_rendered, rgb_targets)                                           # stop the gradient of NeRF MLP 
+                img_loss:torch.Tensor = loss_func(fine_rendered, rgb_targets)                           # stop the gradient of NeRF MLP 
 
                 prop_loss:torch.Tensor = prop_loss_func(weight_bounds, weights.detach())                # stop the gradient of NeRF MLP 
-                loss:torch.Tensor = prop_loss + img_loss + 5e-4 * normal_loss + 0.2 * bf_loss           # + 0.01 * reg_loss_func(weights, fine_lengths)
+                loss:torch.Tensor = prop_loss + img_loss + 5e-4 * (normal_loss + 0.1 * coarse_normal_loss)  + 0.2 * bf_loss
                 return loss, img_loss
             if use_amp:
                 if opt_mode == "native":
@@ -239,7 +241,7 @@ def main(args):
                 ))
                 images_to_save = []
                 images_to_save.extend(test_results)
-                save_image(images_to_save, "./output/result_%03d.png"%(test_cnt), nrow = 3)
+                save_image(images_to_save, "./output/result_%03d.png"%(test_cnt), nrow = 1 + render_normal + render_depth)
                 # ======== Saving checkpoints ========
                 saveModel(mip_net,  "%schkpt_%d_mip.pt"%(default_chkpt_path, train_cnt), {"train_cnt": train_cnt, "epoch": ep}, opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
                 saveModel(prop_net,  "%schkpt_%d_prop.pt"%(default_chkpt_path, train_cnt), opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
@@ -258,15 +260,6 @@ def main(args):
 
 if __name__ == "__main__":
     parser = get_parser()
-
-    parser.add_argument("--pe_period_scale", type = float, default = 0.5, help = "Scale of positional encoding")
-    parser.add_argument("--opt_mode", type = str, default = "O1", help = "Optimization mode: none, native (torch amp), O1, O2 (apex amp)")
-
-    parser.add_argument("--ide_level", type = int, default = 4, help = "Max level of spherical harmonics to be used")
-    parser.add_argument("--bottle_neck_noise", type = float, default = 0.02, help = "Noise std for perturbing bottle_neck vector")
-    parser.add_argument("--render_normal", default = False, action = "store_true", help = "Render normal image")
-    parser.add_argument("-u", "--use_srgb", default = False, action = "store_true", help = "Whether to use srgb in the output or not")
-
     args = parser.parse_args()      # spherical rendering is disabled (for now)
     do_render = args.do_render
     opt_mode = args.opt_mode

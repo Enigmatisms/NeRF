@@ -84,7 +84,7 @@ class RefNeRF(NeRF):
         if self.training == True:
             spa_info_b = spa_info_b + torch.normal(0, self.perturb_bottle_neck_w, spa_info_b.shape, device = spa_info_b.device)
 
-        normal = -normal / (normal.norm(dim = -1, keepdim = True) + 1e-7)
+        normal = normal / (normal.norm(dim = -1, keepdim = True) + 1e-7)
         # needs further validation
         ray_d = pts[..., 3:] if ray_d is None else ray_d
         reflect_r = ray_d - 2. * torch.sum(ray_d * normal, dim = -1, keepdim = True) * normal
@@ -104,6 +104,24 @@ class RefNeRF(NeRF):
             diffuse_rgb = torch.sigmoid(diffuse_rgb)
             rgb = specular_rgb + diffuse_rgb
         return torch.cat((rgb, density), dim = -1), normal      # output (ray_num, point_num, 4) + (ray_num, point_num, 3)
+    
+    @staticmethod
+    def coarse_grad_select(fine_grads: torch.Tensor, sort_inds: torch.Tensor, c_pnum: int) -> torch.Tensor:
+        ray_num, all_pnum, _ = fine_grads.shape
+        target_device = fine_grads.device 
+        selector = torch.cat([
+            torch.fill((ray_num, all_pnum - c_pnum), False, device = target_device),
+            torch.fill((ray_num, c_pnum), True, device = target_device),
+        ], dim = -1)
+        selector = torch.gather(selector, -1, sort_inds)
+        return fine_grads[selector].reshape(ray_num, c_pnum, -1)
+
+    @staticmethod
+    def get_grad(func_val: torch.Tensor, input: torch.Tensor) -> torch.Tensor:  # remember: grad goes from low to high
+        grad, = torch.autograd.grad(func_val, input, 
+            torch.ones_like(func_val, device = func_val.device), retain_graph = True
+        )
+        return grad / grad.norm(dim = -1, keepdim = True)
 
 class WeightedNormalLoss(nn.Module):
     def __init__(self, size_average = False):

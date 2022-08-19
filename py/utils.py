@@ -88,7 +88,8 @@ def validSampler(rgbs:torch.Tensor, coords:torch.Tensor, cam_tf:torch.Tensor, ra
         all_lengths = torch.linspace(near, far - resolution, point_num).to(target_device)
         lengths = all_lengths + torch.rand((ray_num, point_num)).to(target_device) * resolution
         pts = cam_tf[:, -1] + ray_raw[:, None, :] * lengths[:, :, None]
-        return torch.cat((pts, ray_raw.unsqueeze(-2).repeat(1, point_num, 1)), dim = -1), lengths, output_rgb, torch.cat((cam_tf[:, -1].unsqueeze(0).repeat(ray_raw.shape[0], 1), ray_raw), dim = -1)
+        # commit after 635509b: coarse sample results no ray direction
+        return pts, lengths, output_rgb, torch.cat((cam_tf[:, -1].unsqueeze(0).expand(ray_raw.shape[0], -1), ray_raw), dim = -1)
     # return shape (ray_num, point_num, 3), (ray_num, point_num), rgb(ray_num, rgb), cams(ray_num, ray_dir, ray_t)
     return output_rgb, torch.cat((cam_tf[:, -1].unsqueeze(0).repeat(ray_raw.shape[0], 1), ray_raw), dim = -1)
 

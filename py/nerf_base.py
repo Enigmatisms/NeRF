@@ -63,7 +63,7 @@ class NeRF(nn.Module):
         pts = rays[...,None,:3] + rays[...,None,3:] * zvals[...,:,None] 
         result_samples = torch.cat((pts, rays[:, 3:].unsqueeze(-2).expand(-1, sample_pnum, -1)), dim = -1)
         if f_inds is not None:
-            return result_samples, zvals, all_inds          # output is (ray_num, coarse_pts num + fine pts num, 6)
+            return result_samples, zvals, all_inds, sort_inds          # output is (ray_num, coarse_pts num + fine pts num, 6)
         return result_samples, zvals,
 
     """
