@@ -12,9 +12,8 @@ from py.nerf_helper import makeMLP, positional_encoding
 # according to calculated weights (of proposal net) and indices of inverse sampling, calculate the bounds required for loss computation
 # input weights (from proposal net) shape: (ray_num, num of proposal interval), inds shape (ray_num, fine_sample num + 1? TODO, 2)
 # 输入的inds应该是sample_pdf中的 below，每个点将有两个值。考虑到sample_pdf得到的点数量为(cone_num + 1)
-def getBounds(weights:torch.Tensor, inds:torch.Tensor, sort_inds:torch.Tensor):
+def getBounds(weights:torch.Tensor, inds:torch.Tensor):
     ray_num, target_device = weights.shape[0], weights.device
-    inds = torch.gather(inds, -1, sort_inds)
     starts, ends = inds[:, :-1], inds[:, 1:] + 1
     sat:torch.Tensor = torch.cat((torch.zeros(ray_num, 1, device = target_device), torch.cumsum(weights, dim = -1)), dim = -1)                  # proposal net 的weights
     return torch.gather(sat, -1, ends) - torch.gather(sat, -1, starts)
@@ -63,6 +62,7 @@ class ProposalNetwork(nn.Module):
     def __init__(self, position_flevel, hidden_unit = 128, cat_origin = True) -> None:
         super().__init__()
         self.position_dims = position_flevel * 6
+        self.position_flevel = position_flevel
         self.cat_origin = cat_origin
         extra_dims = 3 if cat_origin else 0
         self.layers = nn.Sequential(
@@ -90,7 +90,7 @@ class ProposalNetwork(nn.Module):
         if not encoded_pt is None:
             encoded_x = encoded_pt.view(pts.shape[0], pts.shape[1], self.position_dims)
         else:
-            encoded_x = positional_encoding(pts, 10)
+            encoded_x = positional_encoding(pts, self.position_flevel)
         if self.cat_origin:
             encoded_x = torch.cat((pts, encoded_x), -1)
         # output shape (ray_num, coarse_sample_num, 1) --> (ray_num, coarse_sample_num)
@@ -106,14 +106,6 @@ class ProposalNetwork(nn.Module):
         alpha:torch.Tensor = 1. - mult
         weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)).cuda(), mult + 1e-10], -1), -1)[:, :-1]
         return weights     # output (ray_num, num of coarse sample (proposal interval number))
-
-    @staticmethod
-    def coarseFineMerge(coarse_pts:torch.Tensor, fine_pts:torch.Tensor, c_zvals:torch.Tensor, f_zvals:torch.Tensor):
-        all_pts = torch.cat((fine_pts, coarse_pts), dim = -2)
-        all_zvals = torch.cat((f_zvals, c_zvals), dim = -1)
-        all_zvals, sort_inds = torch.sort(all_zvals, dim = -1)
-        sorted_pts = torch.gather(all_pts, -2, sort_inds.unsqueeze(-1).expand(-1, -1, 6))
-        return sorted_pts, all_zvals, sort_inds
 
 if __name__ == "__main__":
     print("Hello NeRF world!")
