@@ -1,18 +1,18 @@
-# NeRF Repo Updates
+# NeRFs
 
 ---
 
 This repo contains the following reproduction implementation:
 
-CVPR 2022 best student honorable mention: [Ref-NeRF: Structured View-Dependent Appearance for Neural Radiance Fields](https://arxiv.org/abs/2112.03907) is implemented in this repo. This repo can turn Ref NeRF part on/off with one flag: `-t`. Ref NeRF is implemented upon (proposal network + NeRF) framework. Currently, the result is not so satisfying as I expected. This may be caused by insufficient time for training (limited training device, 6GB global memory, can only use up to batch size 2^9 (rays), while the paper uses 2^14).
+(1) CVPR 2022 best student honorable mention: [Ref-NeRF: Structured View-Dependent Appearance for Neural Radiance Fields](https://arxiv.org/abs/2112.03907) is implemented in this repo. This repo can turn Ref NeRF part on/off with one flag: `-t`. Ref NeRF is implemented upon (proposal network + NeRF) framework. Currently, the result is not so satisfying as I expected. This may be caused by insufficient time for training (limited training device, 6GB global memory, can only use up to batch size 2^9 (rays), while the paper uses 2^14).
 
-The idea from [ICCV 2021: Mip-NeRF: A Multiscale Representation for Anti-Aliasing Neural Radiance Fields](https://jonbarron.info/mipnerf/), using conical frustum instead of pure points in sampling, trying to solve the problem of aliasing under multi-resolution settings. Removed the use of coarse network.
+(2) The idea from [ICCV 2021: Mip-NeRF: A Multiscale Representation for Anti-Aliasing Neural Radiance Fields](https://jonbarron.info/mipnerf/), using conical frustum instead of pure points in sampling, trying to solve the problem of aliasing under multi-resolution settings. Removed the use of coarse network.
 
-The idea from [CVPR 2022: Mip-NeRF 360: Unbounded Anti-Aliased Neural Radiance Fields](https://paperswithcode.com/paper/mip-nerf-360-unbounded-anti-aliased-neural/review/), which currently has no open-sourced code.
+(3) The idea from [CVPR 2022: Mip-NeRF 360: Unbounded Anti-Aliased Neural Radiance Fields](https://paperswithcode.com/paper/mip-nerf-360-unbounded-anti-aliased-neural/review/), which currently has no open-sourced code.
 
-Original NeRF paper: [ECCV 2020: Representing Scenes as Neural Radiance Fields for View Synthesis](https://www.matthewtancik.com/nerf). Well, actually this is lost in all these commits.
+(4) Original NeRF paper: [ECCV 2020: Representing Scenes as Neural Radiance Fields for View Synthesis](https://www.matthewtancik.com/nerf). Well, actually this is lost in all these commits.
 
-Info-NeRF (information theory based regularizer, boosting results for "few shot" learning in NeRF): [InfoNeRF: Ray Entropy Minimization for Few-Shot Neural Volume Rendering](https://arxiv.org/abs/2112.15399). The reproduction is implemented by [Dinngger](https://github.com/Dinngger), in branch `infonerf`.
+(5) Info-NeRF (information theory based regularizer, boosting results for "few shot" learning in NeRF): [InfoNeRF: Ray Entropy Minimization for Few-Shot Neural Volume Rendering](https://arxiv.org/abs/2112.15399). The reproduction is implemented by [Dinngger](https://github.com/Dinngger), in branch `infonerf`.
 
 - Using shallower proposal network distilled from NeRF MLP weight rendering, in order to reduce the evaluation time for coarse samples.
 - Ref NeRF is built together with the proposal network proposed in mip NeRF 360, making the model harder to train. The reason behind this is (I suppose) normal prediction in Ref NeRF uses a "back-culling strategy" (orientation loss), which prevents foggy artifacts behind semi-transparent surface. This strategy will both concentrate density and have some strange (magical) effect on the gradients of proposal network. I experimented with original NeRF framework, and things seem to work out fine, with no mosaic-like noise.
@@ -25,6 +25,11 @@ If you are interested in the implementation of NeRFs and you don't want to read 
 - If you are interested in CUDA implementations (there were, once), please refer to: [issue#4](https://github.com/Enigmatisms/NeRF/issues/4) and [issue#6](https://github.com/Enigmatisms/NeRF/issues/6) 
 
 Some Ref NeRF results:
+(Latest-commit `e4907564`) Shinny blender "helmet" dataset trained for 3 hours (not completed, PSNR around 18)
+
+
+(Older-commit `847fdb9d`) Shinny blender "helmet" dataset trained for 6-7 hours (not completed, PSNR around 19.5)
+![ezgif-1-8207b1faa2](https://user-images.githubusercontent.com/46109954/185753069-d5cbd05e-1f66-4423-9503-1a5cd126ed89.gif)
 
 
 
