@@ -154,8 +154,11 @@ def main(args):
             def run(is_ref_model = False):
                 coarse_samples.requires_grad = prop_normal                  
                 density = prop_net.forward(coarse_samples)
+                if prop_normal == True:
+                    coarse_grad = -RefNeRF.get_grad(density, coarse_samples)
+                density = F.softplus(density)
                 prop_weights_raw = ProposalNetwork.get_weights(density, coarse_lengths, coarse_cam_rays[:, 3:])      # (ray_num, num of proposal interval)
-                prop_weights = maxBlurFilter(prop_weights_raw, 0.03)
+                prop_weights = maxBlurFilter(prop_weights_raw, 0.01)
 
                 coarse_normal_loss = normal_loss = bf_loss = 0.
                 fine_lengths, below_idxs = inverseSample(prop_weights, coarse_lengths, fine_sample_pnum + 1, sort = True)
@@ -165,14 +168,13 @@ def main(args):
                     fine_pos.requires_grad = True
                     fine_rgbo, pred_normal = mip_net.forward(fine_pos, fine_dir)
                     density_grad = -RefNeRF.get_grad(fine_rgbo[..., -1], fine_pos)
-                    if prop_normal == True:
-                        coarse_grad = -RefNeRF.get_grad(density, coarse_samples)
-                        coarse_pt_fine_grad = RefNeRF.coarse_grad_select(density_grad, sort_ids, coarse_sample_pnum)
-                        coarse_normal_loss = normal_loss_func(weights, coarse_pt_fine_grad.detach(), coarse_grad)
                     fine_rgbo[..., -1] = F.softplus(fine_rgbo[..., -1] + 0.5)
                     fine_rendered, weights, _ = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:], mip_net.density_act)
                     normal_loss = normal_loss_func(weights, density_grad, pred_normal)
                     bf_loss = bf_loss_func(weights, pred_normal, fine_dir)
+                    if prop_normal == True:
+                        coarse_pt_fine_grad = RefNeRF.coarse_grad_select(density_grad, sort_ids, coarse_sample_pnum)
+                        coarse_normal_loss = normal_loss_func(prop_weights, coarse_pt_fine_grad.detach(), coarse_grad)
                 else:
                     fine_lengths = fine_lengths[..., :-1]
                     fine_samples = NeRF.length2pts(coarse_cam_rays, fine_lengths)
@@ -183,7 +185,7 @@ def main(args):
                 img_loss:torch.Tensor = loss_func(fine_rendered, rgb_targets)                           # stop the gradient of NeRF MLP 
 
                 prop_loss:torch.Tensor = prop_loss_func(weight_bounds, weights.detach())                # stop the gradient of NeRF MLP 
-                loss:torch.Tensor = prop_loss + img_loss + 5e-4 * (normal_loss + 0.1 * coarse_normal_loss)  + 0.2 * bf_loss
+                loss:torch.Tensor = prop_loss + img_loss + 4e-4 * (normal_loss + 0.1 * coarse_normal_loss)  + 0.1 * bf_loss
                 return loss, img_loss
             if use_amp:
                 if opt_mode == "native":

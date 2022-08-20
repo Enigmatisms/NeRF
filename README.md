@@ -1,36 +1,40 @@
-# NeRF
+# NeRF Repo Updates
 
 ---
 
-#### 7.12 update
+This repo contains the following reproduction implementation:
 
-Better code structure for running and debugging. The original NeRF (in previous versions, the executable of which is named `train.py`) is no longer supported. Instead, NeRF with mip 360 (proposal network) and auto-mixed precision is currently maintained. Run the following code to find out:
-```shell
-python ./train.py -w -s --opt_level O1 --dataset_name ship
-```
-`-w` indicates white background. `-s` and `--opt_level` set up amp env.
-
----
-
-Reproduction results:
-
-|   Lego trained for 2.5h    |          Hotdog trained for 30min          |
-| :------------------------------: | :---------------------------------------------------: |
-| ![ezgif-4-fe2ea0a6a2](https://user-images.githubusercontent.com/46109954/173533863-499b04bf-4242-41a5-98d4-6fc81ee412b3.gif) | ![ezgif-4-402a3412da](https://user-images.githubusercontent.com/46109954/173536624-beb64cb6-e151-4267-94c9-183793951011.gif) |
-
----
-#### 4.25 Update
-
-To boost the resulting quality, two more approaches are incorporated in this repo:
+CVPR 2022 best student honorable mention: [Ref-NeRF: Structured View-Dependent Appearance for Neural Radiance Fields](https://arxiv.org/abs/2112.03907) is implemented in this repo. This repo can turn Ref NeRF part on/off with one flag: `-t`. Ref NeRF is implemented upon (proposal network + NeRF) framework. Currently, the result is not so satisfying as I expected. This may be caused by insufficient time for training (limited training device, 6GB global memory, can only use up to batch size 2^9 (rays), while the paper uses 2^14).
 
 The idea from [ICCV 2021: Mip-NeRF: A Multiscale Representation for Anti-Aliasing Neural Radiance Fields](https://jonbarron.info/mipnerf/), using conical frustum instead of pure points in sampling, trying to solve the problem of aliasing under multi-resolution settings. Removed the use of coarse network.
 
-The idea from [CVPR 2022: Mip-NeRF 360: Unbounded Anti-Aliased Neural Radiance Fields](https://paperswithcode.com/paper/mip-nerf-360-unbounded-anti-aliased-neural/review/), which currently has no open-sourced code:
+The idea from [CVPR 2022: Mip-NeRF 360: Unbounded Anti-Aliased Neural Radiance Fields](https://paperswithcode.com/paper/mip-nerf-360-unbounded-anti-aliased-neural/review/), which currently has no open-sourced code.
+
+Original NeRF paper: [ECCV 2020: Representing Scenes as Neural Radiance Fields for View Synthesis](https://www.matthewtancik.com/nerf). Well, actually this is lost in all these commits.
+
+Info-NeRF (information theory based regularizer, boosting results for "few shot" learning in NeRF): [InfoNeRF: Ray Entropy Minimization for Few-Shot Neural Volume Rendering](https://arxiv.org/abs/2112.15399). The reproduction is implemented by [Dinngger](https://github.com/Dinngger), in branch `infonerf`.
 
 - Using shallower proposal network distilled from NeRF MLP weight rendering, in order to reduce the evaluation time for coarse samples.
-- Using weight regularizer which aims to concentrate computed weight in a smaller region, make it more "delta-function-like". The final output is more accurate. Here are the result and a small comparison:
+- Ref NeRF is built together with the proposal network proposed in mip NeRF 360, making the model harder to train. The reason behind this is (I suppose) normal prediction in Ref NeRF uses a "back-culling strategy" (orientation loss), which prevents foggy artifacts behind semi-transparent surface. This strategy will both concentrate density and have some strange (magical) effect on the gradients of proposal network. I experimented with original NeRF framework, and things seem to work out fine, with no mosaic-like noise.
+- Using weight regularizer which aims to concentrate computed weight in a smaller region, make it more "delta-function-like". The final output is more accurate. There are some results and a small comparison below.
 
-The second blog about the latest re-implementation is to be posted.
+If you are interested in the implementation of NeRFs and you don't want to read tedious codes, then this repo offers more comprehensive codes (Yeah, clearer logic, but not necessarily good-looking or efficient or even scalable..., it depends on how u see things). For more detailed info about this repo and reproduction, please refer to:
+
+- [Updates.md](https://github.com/Enigmatisms/NeRF/blob/master/Update.md). This file records the major updates of this repo.
+- Some Chinese blogs of mine: [Neural Randiance Field【1】](https://enigmatisms.github.io/2022/03/13/Neural-Randiance-Field%E3%80%901%E3%80%91/)，[NeRF论文复现](https://enigmatisms.github.io/2022/03/27/NeRF%E8%AE%BA%E6%96%87%E5%A4%8D%E7%8E%B0/)， [Ref NeRF复现]()
+- If you are interested in CUDA implementations (there were, once), please refer to: [issue#4](https://github.com/Enigmatisms/NeRF/issues/4) and [issue#6](https://github.com/Enigmatisms/NeRF/issues/6) 
+
+Some Ref NeRF results:
+
+
+
+Some old results(2022.6) : Mip NeRF proposal network distillation with amp speed up (yeah, this is faster)
+
+|                    Lego trained for 2.5h                     |                   Hotdog trained for 30min                   |
+| :----------------------------------------------------------: | :----------------------------------------------------------: |
+| ![ezgif-4-fe2ea0a6a2](https://user-images.githubusercontent.com/46109954/173533863-499b04bf-4242-41a5-98d4-6fc81ee412b3.gif) | ![ezgif-4-402a3412da](https://user-images.githubusercontent.com/46109954/173536624-beb64cb6-e151-4267-94c9-183793951011.gif) |
+
+Some older results (2022.4): 
 
 |   Spherical views (400 * 400)    |          Comparison (no regularizer - left)           |   Proposal network distillation   |
 | :------------------------------: | :---------------------------------------------------: | :-------------------------------: |
@@ -40,14 +44,7 @@ The second blog about the latest re-implementation is to be posted.
 
 ---
 
-Re-implementation of ECCV 2020 NeRF with PyTorch:
-
-- [Representing Scenes as Neural Radiance Fields for View Synthesis](https://www.matthewtancik.com/nerf)
-- More information ? Refer to my blog about this reimplementation: [enigmatisms.github.io/NeRF论文复现](https://enigmatisms.github.io/2022/03/27/NeRF%E8%AE%BA%E6%96%87%E5%A4%8D%E7%8E%B0/)
-
-Quick overview for a 10-hour training results (single view rendering, APEX O2 optimized) in nerf-blender-synthetic dataset (drums):
-
-<img src="./assets/dynamic.gif" style="zoom:50%;" />
+## Side Notes
 
 This repo contains:
 
@@ -74,6 +71,8 @@ This repo contains:
 
 ## Repo Structure
 
+There are some folders **YOU MUST HAVE** in the root folder! (See below, the compulsory ones, which is not included in this cloud repo (git ignored))
+
 ```
 .
 ├── logs/ --- tensorboard log storage (compulsory)
@@ -87,7 +86,13 @@ This repo contains:
 	 		├── ... (cuda implemented functions)
 	 └── setup.py	--- PyTorch CUDA extension compiling and exporting script
 └── py/ 
-	 ├── configs.py  --- For tiny-cuda-nn: fatser neural network implementation, the config files
+	 ├── addtional.py  --- For mip nerf (proposal network and regularizer)
+	 ├── mip_methods.py  --- Though current implementation uses no cone samling (mip part), the mip functions are retained.
+	 ├── mip_model.py  --- Mip NeRF (no ref), or rather say: NeRF model definition
+	 ├── nerf_base.py  --- Both Ref NeRF and Mip NeRF inherited from this base class
+	 ├── procedures.py  --- Functions like rendering a whole image, rendering with orbital camera views, **argparse default settings**
+	 ├── ref_func.py  --- Ref NeRF spherical harmonics (modified and adopted from Ref NeRF official repo)
+	 ├── ref_model.py  --- Ref NeRF model definition
 	 ├── dataset.py --- Custom dataset for loading nerf-synthetic dataset
 	 ├── model.py --- NeRF model, main. (include model definition and rendering)
 	 ├── timer.py --- TicToc timer.
@@ -98,7 +103,9 @@ This repo contains:
 
 ## Compile & Run
 
-### I. With CUDA extension
+### I. With CUDA extension (Deprecated)
+
+CUDA extension is no longer in use for a long time (Dozens of commits ago). But if u insists...
 
 To build pytorch extension for python. Run:
 
@@ -122,14 +129,16 @@ To run the training, make sure you have `output/` and `check_points/` folder in 
 
 ```
 cd . 		# cd 2 root dir
-python ./train.py -s 		# -s enables apex O2 optimization, which is 40%-50% faster during training
+python ./train.py -s 		# -s enables apex O1 optimization, which is 30%-40% faster during training
 ```
 
 For other configurations, plz refer to `python ./train.py --help` for more help.
 
 ---
 
-## Results
+## Results (Outdated)
+
+Please just refer to the "demo" part.
 
 Apart from the dynamic results (full resolution) listed above, there are some additional results (from nerf-blender-synthetic dataset (lego)):
 

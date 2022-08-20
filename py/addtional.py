@@ -68,7 +68,7 @@ class ProposalNetwork(nn.Module):
         self.layers = nn.Sequential(
             *makeMLP(self.position_dims + extra_dims, hidden_unit),
             *makeMLP(hidden_unit, hidden_unit), *makeMLP(hidden_unit, hidden_unit), *makeMLP(hidden_unit, hidden_unit),
-            *makeMLP(hidden_unit, 1, nn.Softplus())
+            *makeMLP(hidden_unit, 1, None)
         )
         self.apply(self.init_weight)
 
