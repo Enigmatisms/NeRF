@@ -25,8 +25,7 @@ If you are interested in the implementation of NeRFs and you don't want to read 
 - If you are interested in CUDA implementations (there were, once), please refer to: [issue#4](https://github.com/Enigmatisms/NeRF/issues/4) and [issue#6](https://github.com/Enigmatisms/NeRF/issues/6) 
 
 Some Ref NeRF results:
-(Latest-commit `e4907564`) Shinny blender "helmet" dataset trained for 3 hours (not completed, PSNR around 18)
-
+(Latest-commit `e4907564`) Shinny blender "helmet" dataset trained for 3 hours (not completed, PSNR around 18). Oops, gif file to big to upload. Fine, just imagine the output, its better than the older commit (in terms of normal prediction)
 
 (Older-commit `847fdb9d`) Shinny blender "helmet" dataset trained for 6-7 hours (not completed, PSNR around 19.5)
 ![ezgif-1-8207b1faa2](https://user-images.githubusercontent.com/46109954/185753069-d5cbd05e-1f66-4423-9503-1a5cd126ed89.gif)
