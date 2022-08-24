@@ -1,1 +1,0 @@
-python3 ./train.py -s -t -u --sample_ray_num 512 --grad_clip -0.01 --dataset_name helmet --render_depth --render_normal -l --name helmet_v1

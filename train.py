@@ -69,11 +69,11 @@ def main(args):
         from py.ref_model import RefNeRF, WeightedNormalLoss, BackFaceLoss
         normal_loss_func = WeightedNormalLoss(True)
         bf_loss_func = BackFaceLoss() 
-        mip_net = RefNeRF(10, args.ide_level, hidden_unit = 256, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
+        mip_net = RefNeRF(10, args.ide_level, hidden_unit = args.nerf_net_width, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
     else:
         from py.mip_model import MipNeRF
-        mip_net = MipNeRF(10, 4, hidden_unit = 256).cuda()
-    prop_net = ProposalNetwork(10, hidden_unit = 256).cuda()
+        mip_net = MipNeRF(10, 4, hidden_unit = args.nerf_net_width).cuda()
+    prop_net = ProposalNetwork(10, hidden_unit = args.prop_net_width).cuda()
 
     if debugging:
         for submodule in mip_net.modules():
@@ -92,8 +92,10 @@ def main(args):
     ])
 
     # 数据集加载
-    trainset = CustomDataSet("../dataset/refnerf/%s/"%(dataset_name), transform_funcs, scene_scale, True, use_alpha = False, white_bkg = use_white_bkg)
-    testset = CustomDataSet("../dataset/refnerf/%s/"%(dataset_name), transform_funcs, scene_scale, False, use_alpha = False, white_bkg = use_white_bkg)
+    trainset = CustomDataSet("../dataset/refnerf/%s/"%(dataset_name), transform_funcs, 
+        scene_scale, True, use_alpha = False, white_bkg = use_white_bkg, is_cuda = True)
+    testset = CustomDataSet("../dataset/refnerf/%s/"%(dataset_name), transform_funcs, 
+        scene_scale, False, use_alpha = False, white_bkg = use_white_bkg)
     cam_fov_train, train_cam_tf = trainset.getCameraParam()
     r_c = trainset.r_c()
     train_cam_tf = train_cam_tf.cuda()
@@ -126,6 +128,7 @@ def main(args):
     test_views = []
     for i in (1, 4):
         test_views.append(testset[i])
+    del testset
     torch.cuda.empty_cache()
 
     # ====== tensorboard summary writer ======
@@ -141,8 +144,6 @@ def main(args):
         epoch_timer.tic()
         for i, (train_img, train_tf) in enumerate(train_loader):
             train_timer.tic()
-            train_img = train_img.cuda().squeeze(0)
-            train_tf = train_tf.cuda().squeeze(0)
             now_crop = (center_crop if train_cnt < center_crop_iter else (1., 1.))
             valid_pixels, valid_coords = randomFromOneImage(train_img, now_crop)
 
@@ -228,7 +229,7 @@ def main(args):
             with torch.no_grad():
                 eval_timer.tic()
                 test_results = []
-                test_loss = torch.zeros(1).cuda()
+                test_loss = 0.
                 for test_img, test_tf in test_views:
                     test_result = render_image(
                         mip_net, prop_net, test_tf.cuda(), r_c, test_focal, near_t, far_t, fine_sample_pnum, 
@@ -242,9 +243,7 @@ def main(args):
                 print("Evaluation in epoch: %4d / %4d\t, test counter: %d test loss: %.4f\taverage time: %.4lf\tremaining eval time:%s"%(
                         ep, epochs, test_cnt, test_loss.item() / 2, eval_timer.get_mean_time(), eval_timer.remaining_time(epochs - ep - 1)
                 ))
-                images_to_save = []
-                images_to_save.extend(test_results)
-                save_image(images_to_save, "./output/result_%03d.png"%(test_cnt), nrow = 1 + render_normal + render_depth)
+                save_image(test_results, "./output/result_%03d.png"%(test_cnt), nrow = 1 + render_normal + render_depth)
                 # ======== Saving checkpoints ========
                 saveModel(mip_net,  "%schkpt_%d_mip.pt"%(default_chkpt_path, train_cnt), {"train_cnt": train_cnt, "epoch": ep}, opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
                 saveModel(prop_net,  "%schkpt_%d_prop.pt"%(default_chkpt_path, train_cnt), opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)

@@ -2,6 +2,10 @@
 
 ---
 
+### 8.24 Update
+
+It turns out that PSNR calculation is to blame. My loss function is not MSE (PSNR is calculated using MSE), it is SoftL1 (`sqrt(e^2 + ε)`), which is bigger than expected. Therefore "PSNR" is low (around 19.). Currently, PSNR of the model's (trained for only 7 hours) is around 28.5.
+
 ### 8.19 Update
 
 CVPR 2022 best student honorable mention: [Ref-NeRF: Structured View-Dependent Appearance for Neural Radiance Fields](https://arxiv.org/abs/2112.03907) is implemented in this repo. This repo can turn Ref NeRF part on/off with one flag: `-t`. Ref NeRF is implemented upon (proposal network + NeRF) framework. Currently, the result is not so satisfying as I expected. This may be caused by insufficient time for training (limited training device, 6GB global memory, can only use up to batch size 2^9 (rays), while the paper uses 2^14).

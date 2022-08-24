@@ -41,7 +41,7 @@ class SoftL1Loss(nn.Module):
         super().__init__()
         self.eps = epsilon
     def forward(self, pred:torch.Tensor, target:torch.Tensor):
-        return torch.mean(torch.sqrt(self.eps ** 2 + (pred - target) ** 2))
+        return torch.mean((pred - target) ** 2)
 
 class LossPSNR(nn.Module):
     __LOG_10__ = 2.3025851249694824
