@@ -32,7 +32,7 @@ class AdaptiveResize(nn.Module):
         return F.resize(input, size, self.interpolation, self.max_size, self.antialias)
         
 class CustomDataSet(data.Dataset):
-    def __init__(self, root_dir, transform, scene_scale = 1.0, is_train = True, use_alpha = False, white_bkg = False, is_cuda = False):
+    def __init__(self, root_dir, transform, scene_scale = 1.0, is_train = True, use_alpha = False, white_bkg = False):
         self.is_train = is_train
         self.root_dir = root_dir
         self.main_dir = root_dir + ("train/" if is_train else "test/")
@@ -43,7 +43,6 @@ class CustomDataSet(data.Dataset):
         self.use_alpha = use_alpha
         self.scene_scale = scene_scale
         self.white_bkg = white_bkg
-        self.is_cuda = is_cuda
         self.cam_fov, self.tfs = self.__get_camera_param()
 
     def __len__(self):
@@ -53,15 +52,11 @@ class CustomDataSet(data.Dataset):
         img_loc = os.path.join(self.main_dir, self.total_imgs[idx])
         image = Image.open(img_loc, mode = 'r').convert("RGBA" if self.use_alpha or self.white_bkg else "RGB")
         tensor_image = self.transform(image)
-        if self.is_cuda:
-            tensor_image = tensor_image.cuda()
-            tf = self.tfs[idx].cuda()
-        else:
-            tf = self.tfs[idx].clone()
+        tf = self.tfs[idx].clone()
         if self.white_bkg:
             tensor_image = tensor_image[:3, ...]*tensor_image[-1:, ...] + (1.-tensor_image[-1:, ...])
         tf[:3, -1] *= self.scene_scale
-        return tensor_image.squeeze(0), tf
+        return tensor_image, tf
 
     def r_c(self):
         image, _ = self.__getitem__(0)

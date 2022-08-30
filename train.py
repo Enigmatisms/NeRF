@@ -93,7 +93,7 @@ def main(args):
 
     # 数据集加载
     trainset = CustomDataSet("../dataset/refnerf/%s/"%(dataset_name), transform_funcs, 
-        scene_scale, True, use_alpha = False, white_bkg = use_white_bkg, is_cuda = True)
+        scene_scale, True, use_alpha = False, white_bkg = use_white_bkg)
     testset = CustomDataSet("../dataset/refnerf/%s/"%(dataset_name), transform_funcs, 
         scene_scale, False, use_alpha = False, white_bkg = use_white_bkg)
     cam_fov_train, train_cam_tf = trainset.getCameraParam()
@@ -143,6 +143,8 @@ def main(args):
     for ep in range(ep_start, epochs):
         epoch_timer.tic()
         for i, (train_img, train_tf) in enumerate(train_loader):
+            train_img = train_img.cuda().squeeze(0)
+            train_tf = train_tf.cuda().squeeze(0)
             train_timer.tic()
             now_crop = (center_crop if train_cnt < center_crop_iter else (1., 1.))
             valid_pixels, valid_coords = randomFromOneImage(train_img, now_crop)
