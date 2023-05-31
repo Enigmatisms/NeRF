@@ -32,6 +32,11 @@ class AdaptiveResize(nn.Module):
         return F.resize(input, size, self.interpolation, self.max_size, self.antialias)
         
 class CustomDataSet(data.Dataset):
+    """ Even in the DDP case, we still load images for all the images (won't be a problem)
+        we do not shuffle the data but let the sampler do the work
+
+        TODO: test the sampler
+    """
     def __init__(self, root_dir, transform, scene_scale = 1.0, is_train = True, use_alpha = False, white_bkg = False):
         self.is_train = is_train
         self.root_dir = root_dir

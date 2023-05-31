@@ -95,7 +95,6 @@ def main(args):
         transforms.ToTensor(),
     ])
 
-    # 数据集加载
     trainset = CustomDataSet(f"../dataset/nerf_synthetic/{dataset_name}/", transform_funcs, 
         scene_scale, True, use_alpha = False, white_bkg = use_white_bkg)
     testset = CustomDataSet(f"../dataset/nerf_synthetic/{dataset_name}/", transform_funcs, 

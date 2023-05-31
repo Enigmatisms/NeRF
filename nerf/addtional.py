@@ -11,7 +11,6 @@ from nerf.nerf_helper import makeMLP, positional_encoding
 
 # according to calculated weights (of proposal net) and indices of inverse sampling, calculate the bounds required for loss computation
 # input weights (from proposal net) shape: (ray_num, num of proposal interval), inds shape (ray_num, fine_sample num + 1? TODO, 2)
-# 输入的inds应该是sample_pdf中的 below，每个点将有两个值。考虑到sample_pdf得到的点数量为(cone_num + 1)
 def getBounds(weights:torch.Tensor, inds:torch.Tensor):
     ray_num, target_device = weights.shape[0], weights.device
     starts, ends = inds[:, :-1], inds[:, 1:] + 1
