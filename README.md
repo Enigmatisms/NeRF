@@ -21,7 +21,7 @@ This repo contains the following reproduction implementation:
 If you are interested in the implementation of NeRFs and you don't want to read tedious codes, then this repo offers more comprehensive codes (Yeah, clearer logic, but not necessarily good-looking or efficient or even scalable..., it depends on how u see things). For more detailed info about this repo and reproduction, please refer to:
 
 - [Updates.md](https://github.com/Enigmatisms/NeRF/blob/master/Update.md). This file records the major updates of this repo.
-- Some Chinese blogs of mine: [Neural Randiance Field【1】](https://enigmatisms.github.io/2022/03/13/Neural-Randiance-Field%E3%80%901%E3%80%91/)，[NeRF论文复现](https://enigmatisms.github.io/2022/03/27/NeRF%E8%AE%BA%E6%96%87%E5%A4%8D%E7%8E%B0/)， [Ref NeRF复现]()
+- Some Chinese blogs of mine: [Neural Randiance Field【1】](https://enigmatisms.github.io/2022/03/13/Neural-Randiance-Field%E3%80%901%E3%80%91/)，[NeRF论文复现](https://enigmatisms.github.io/2022/03/27/NeRF%E8%AE%BA%E6%96%87%E5%A4%8D%E7%8E%B0/)， [Ref NeRF复现](https://enigmatisms.github.io/2022/08/13/Mip-NeRF-Ref-NeRF/)
 - If you are interested in CUDA implementations (there were, once), please refer to: [issue#4](https://github.com/Enigmatisms/NeRF/issues/4) and [issue#6](https://github.com/Enigmatisms/NeRF/issues/6) 
 
 Some Ref NeRF results:

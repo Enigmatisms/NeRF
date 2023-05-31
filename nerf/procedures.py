@@ -40,7 +40,7 @@ def render_image(
     render_normal &= is_ref_model
     target_device = render_pose.device
     col_idxs, row_idxs = torch.meshgrid(torch.arange(image_size[1]), torch.arange(image_size[0]), indexing = 'xy')      # output shape (imagesize[1], imagesize[0])
-    coords = torch.stack((col_idxs - image_size[1] / 2, image_size[0] / 2 - row_idxs), dim = -1).to(target_device)
+    coords = torch.stack((col_idxs - image_size[1] / 2, image_size[0] / 2 - row_idxs), dim = -1).to(target_device) + 0.5
     if isinstance(focal, Iterable):
         coords[..., 0] /= focal[1]
         coords[..., 1] /= focal[0]
