@@ -7,7 +7,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from py.nerf_helper import makeMLP, positional_encoding
+from nerf.nerf_helper import makeMLP, positional_encoding
 
 # according to calculated weights (of proposal net) and indices of inverse sampling, calculate the bounds required for loss computation
 # input weights (from proposal net) shape: (ray_num, num of proposal interval), inds shape (ray_num, fine_sample num + 1? TODO, 2)

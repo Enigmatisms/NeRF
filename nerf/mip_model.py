@@ -6,8 +6,8 @@
 
 import torch
 from torch import nn
-from py.nerf_base import NeRF
-from py.nerf_helper import makeMLP, positional_encoding
+from nerf.nerf_base import NeRF
+from nerf.nerf_helper import makeMLP, positional_encoding
 # import tinycudann as tcnn
 
 # This module is shared by coarse and fine network, with no need to modify

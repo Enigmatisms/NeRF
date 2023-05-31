@@ -9,15 +9,15 @@ from torchvision import transforms
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
-from py.timer import Timer
-from py.nerf_base import DecayLrScheduler, NeRF
-from py.dataset import CustomDataSet, AdaptiveResize
+from nerf.timer import Timer
+from nerf.nerf_base import DecayLrScheduler, NeRF
+from nerf.dataset import CustomDataSet, AdaptiveResize
 from torchvision.utils import save_image
-from py.nerf_helper import nan_hook, saveModel
-from py.mip_methods import maxBlurFilter
-from py.procedures import render_image, get_parser, render_only
-from py.utils import fov2Focal, getSummaryWriter, validSampler, randomFromOneImage, inverseSample
-from py.addtional import getBounds, ProposalLoss, ProposalNetwork, SoftL1Loss, LossPSNR
+from nerf.nerf_helper import nan_hook, saveModel
+from nerf.mip_methods import maxBlurFilter
+from nerf.procedures import render_image, get_parser, render_only
+from nerf.utils import fov2Focal, getSummaryWriter, validSampler, randomFromOneImage, inverseSample
+from nerf.addtional import getBounds, ProposalLoss, ProposalNetwork, SoftL1Loss, LossPSNR
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.cuda.amp import autocast as autocast
 
@@ -57,7 +57,11 @@ def main(args):
     train_cnt, ep_start = None, None
 
     if use_amp:
-        from apex import amp
+        try:
+            from apex import amp
+        except ModuleNotFoundError:
+            print("Nvidia APEX module is not found.")
+
 
     if not torch.cuda.is_available():
         print("CUDA not available.")
@@ -66,12 +70,12 @@ def main(args):
     # ======= instantiate model =====
     # NOTE: model is recommended to have loadFromFile method
     if use_ref_nerf:
-        from py.ref_model import RefNeRF, WeightedNormalLoss, BackFaceLoss
+        from nerf.ref_model import RefNeRF, WeightedNormalLoss, BackFaceLoss
         normal_loss_func = WeightedNormalLoss(True)
         bf_loss_func = BackFaceLoss() 
         mip_net = RefNeRF(10, args.ide_level, hidden_unit = args.nerf_net_width, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
     else:
-        from py.mip_model import MipNeRF
+        from nerf.mip_model import MipNeRF
         mip_net = MipNeRF(10, 4, hidden_unit = args.nerf_net_width).cuda()
     prop_net = ProposalNetwork(10, hidden_unit = args.prop_net_width).cuda()
 
@@ -81,7 +85,7 @@ def main(args):
         torch.autograd.set_detect_anomaly(True)
 
     # ======= Loss function ==========
-    loss_func = SoftL1Loss()
+    loss_func = torch.nn.MSELoss()
     prop_loss_func = ProposalLoss().cuda()
     mse2psnr = LossPSNR()
     # ======= Optimizer and scheduler ========
@@ -92,9 +96,9 @@ def main(args):
     ])
 
     # 数据集加载
-    trainset = CustomDataSet("../dataset/refnerf/%s/"%(dataset_name), transform_funcs, 
+    trainset = CustomDataSet(f"../dataset/nerf_synthetic/{dataset_name}/", transform_funcs, 
         scene_scale, True, use_alpha = False, white_bkg = use_white_bkg)
-    testset = CustomDataSet("../dataset/refnerf/%s/"%(dataset_name), transform_funcs, 
+    testset = CustomDataSet(f"../dataset/nerf_synthetic/{dataset_name}/", transform_funcs, 
         scene_scale, False, use_alpha = False, white_bkg = use_white_bkg)
     cam_fov_train, train_cam_tf = trainset.getCameraParam()
     r_c = trainset.r_c()

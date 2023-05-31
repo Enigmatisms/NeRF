@@ -6,11 +6,11 @@
 import torch
 from torch import nn
 from numpy import log
-from py.nerf_base import NeRF
+from nerf.nerf_base import NeRF
 from typing import Optional, Tuple
 from torch.nn import functional as F
-from py.ref_func import generate_ide_fn
-from py.nerf_helper import makeMLP, positional_encoding, linear_to_srgb
+from nerf.ref_func import generate_ide_fn
+from nerf.nerf_helper import makeMLP, positional_encoding, linear_to_srgb
 
 # Inherited from NeRF (base class)
 class RefNeRF(NeRF):

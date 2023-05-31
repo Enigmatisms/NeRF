@@ -5,15 +5,15 @@ import torch
 import argparse
 from tqdm import tqdm
 
-from py.nerf_base import NeRF
-from py.ref_model import RefNeRF
+from nerf.nerf_base import NeRF
+from nerf.ref_model import RefNeRF
 from torchvision import transforms
-from py.dataset import CustomDataSet, AdaptiveResize
-from py.addtional import ProposalNetwork
+from nerf.dataset import CustomDataSet, AdaptiveResize
+from nerf.addtional import ProposalNetwork
 from torch.nn.functional import softplus
 from torchvision.utils import save_image
-from py.mip_methods import maxBlurFilter
-from py.utils import fov2Focal, inverseSample, pose_spherical
+from nerf.mip_methods import maxBlurFilter
+from nerf.utils import fov2Focal, inverseSample, pose_spherical
 from collections.abc import Iterable
 from torch.cuda.amp import autocast as autocast
 
@@ -121,10 +121,10 @@ def render_only(args, model_path: str, opt_level: str):
     test_focal = fov2Focal(cam_fov_test, r_c)
 
     if use_ref_nerf:
-        from py.ref_model import RefNeRF
+        from nerf.ref_model import RefNeRF
         mip_net = RefNeRF(10, args.ide_level, hidden_unit = 256, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
     else:
-        from py.mip_model import MipNeRF
+        from nerf.mip_model import MipNeRF
         mip_net = MipNeRF(10, 4, hidden_unit = 256)
     prop_net = ProposalNetwork(10, hidden_unit = 256).cuda()
     if use_amp and opt_mode != "native":
