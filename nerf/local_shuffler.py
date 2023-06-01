@@ -52,9 +52,6 @@ class LocalShuffleSampler(DistributedSampler):
         self.seed = seed
 
     def __iter__(self):
-        """ I have a problem
-        
-        """
         indices = deepcopy(self.samples[self.rank])
         if self.shuffle:
             # deterministically shuffle based on epoch and seed
@@ -75,7 +72,7 @@ class LocalShuffleSampler(DistributedSampler):
     """ Note that set_epoch is inherited """
 
 if __name__ == "__main__":
-
+    # Simple unit test
     transform_funcs = transforms.Compose([
         AdaptiveResize(0.5),
         transforms.ToTensor(),
