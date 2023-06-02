@@ -8,6 +8,7 @@ from tqdm import tqdm
 from nerf.nerf_base import NeRF
 from nerf.ref_model import RefNeRF
 from torchvision import transforms
+from torch.nn import functional as F
 from nerf.dataset import CustomDataSet, AdaptiveResize
 from nerf.addtional import ProposalNetwork, SoftL1Loss, LossPSNR
 from torch.nn.functional import softplus
@@ -75,10 +76,10 @@ def render_image(
                 fine_lengths = fine_lengths[..., :-1]
                 fine_samples = NeRF.length2pts(camera_rays, fine_lengths)
                 output_rgbo = network.forward(fine_samples)
-
+            
             part_image, _, extras = NeRF.render(
                 output_rgbo, fine_lengths, camera_rays[..., 3:], 
-                white_bkg = white_bkg, density_act = network.density_act, 
+                white_bkg = white_bkg, density_act = F.relu, 
                 render_depth = (near, far) if render_depth else None, 
                 normal_info = (normal, render_pose[:, -2]) if render_normal else None
             )          # originally outputs (2500, 3) -> (reshape) (sz, sz, 3) -> (to image) (3, sz, sz)

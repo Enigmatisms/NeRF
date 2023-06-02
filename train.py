@@ -62,6 +62,10 @@ def main(args):
         except ModuleNotFoundError:
             print("Nvidia APEX module is not found.")
 
+    if not os.path.exists("./output/"):
+        os.mkdir("./output/")
+    if not os.path.exists("./check_points/"):
+        os.mkdir("./check_points/")
 
     if not torch.cuda.is_available():
         print("CUDA not available.")
@@ -95,9 +99,9 @@ def main(args):
         transforms.ToTensor(),
     ])
 
-    trainset = CustomDataSet(f"../dataset/nerf_synthetic/{dataset_name}/", transform_funcs, 
+    trainset = CustomDataSet(f"../{dataset_name}/", transform_funcs, 
         scene_scale, True, use_alpha = False, white_bkg = use_white_bkg)
-    testset = CustomDataSet(f"../dataset/nerf_synthetic/{dataset_name}/", transform_funcs, 
+    testset = CustomDataSet(f"../{dataset_name}/", transform_funcs, 
         scene_scale, False, use_alpha = False, white_bkg = use_white_bkg)
     cam_fov_train, train_cam_tf = trainset.getCameraParam()
     r_c = trainset.r_c()

@@ -72,6 +72,10 @@ def train(gpu, args):
         except ModuleNotFoundError:
             print("Nvidia APEX module is not found. Only native model is available")
 
+    if not os.path.exists("./output/"):
+        os.mkdir("./output/")
+    if not os.path.exists("./check_points/"):
+        os.mkdir("./check_points/")
 
     if not torch.cuda.is_available():
         print("CUDA not available.")
@@ -110,9 +114,9 @@ def train(gpu, args):
     ])
 
     # ============ Loading dataset ===============
-    trainset = CustomDataSet(f"../dataset/nerf_synthetic/{dataset_name}/", transform_funcs, 
+    trainset = CustomDataSet(f"../{dataset_name}/", transform_funcs, 
         scene_scale, True, use_alpha = False, white_bkg = use_white_bkg)
-    testset = CustomDataSet(f"../dataset/nerf_synthetic/{dataset_name}/", transform_funcs, 
+    testset = CustomDataSet(f"../{dataset_name}/", transform_funcs, 
         scene_scale, False, use_alpha = False, white_bkg = use_white_bkg)
     cam_fov_train, train_cam_tf = trainset.getCameraParam()
     r_c = trainset.r_c()
@@ -122,7 +126,7 @@ def train(gpu, args):
     # ============= Buiding dataloader ===============
 
     train_sampler = DistributedSampler(trainset, num_replicas = args.world_size, rank = rank)
-    train_loader = DataLoader(dataset=trainset, batch_size=1, shuffle=True,
+    train_loader = DataLoader(dataset=trainset, batch_size=1,
                                                 num_workers=4,
                                                 pin_memory=True,
                                                 sampler=train_sampler)
@@ -255,7 +259,7 @@ def train(gpu, args):
                 writer.add_scalar('PSNR', psnr, train_cnt)
             train_cnt += 1
 
-        if ((ep % output_time == 0) or ep == epochs - 1) and ep > ep_start:
+        if ((ep % output_time == 0) or ep == epochs - 1):
             mip_net.eval()
             prop_net.eval()
             with torch.no_grad():
@@ -307,14 +311,13 @@ def main():
                         help='number of gpus per node')
     parser.add_argument('-nr', '--nr', default=0, type=int,
                         help='ranking within the nodes')
-    parser.add_argument('--epochs', default=2, type=int, metavar='N',
-                        help='number of total epochs to run')
 
     args = parser.parse_args()      # spherical rendering is disabled (for now)
 
     args.world_size = args.gpus * args.nodes
-    os.environ['MASTER_ADDR'] = '192.168.1.158'
-    os.environ['MASTER_PORT'] = '12226'
+    os.environ['MASTER_ADDR'] = '192.168.1.156'
+    os.environ['MASTER_PORT'] = '11451'
+    os.environ['NCCL_SOCKET_IFNAME'] = 'eth0'
     mp.spawn(train, nprocs=args.gpus, args=(args,))
 
 if __name__ == "__main__":
