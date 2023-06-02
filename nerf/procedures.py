@@ -166,6 +166,7 @@ def render_only(args, model_path: str, opt_level: str):
 def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type = int, default = 2400, help = "Training lasts for . epochs")
+    parser.add_argument("--max_save", type = int, default = 3, help = "Check point max save number")
     parser.add_argument("--sample_ray_num", type = int, default = 1024, help = "<x> rays to sample per training time")
     parser.add_argument("--coarse_sample_pnum", type = int, default = 64, help = "Points to sample in coarse net")
     parser.add_argument("--fine_sample_pnum", type = int, default = 128, help = "Points to sample in fine net")

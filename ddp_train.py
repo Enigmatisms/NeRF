@@ -165,7 +165,7 @@ def train(gpu, args):
     torch.cuda.empty_cache()
 
     # ====== tensorboard summary writer ======
-    if gpu == 0:
+    if rank == 0:
         writer = getSummaryWriter(epochs, del_dir)
     train_set_len = len(trainset)
 
@@ -247,16 +247,17 @@ def train(gpu, args):
             train_timer.toc()
 
             opt, new_lr = lr_sch.update_opt_lr(train_cnt, opt)
-            if train_cnt % eval_time == 1 and gpu == 0:
+            if train_cnt % eval_time == 1:
                 # ========= Evaluation output ========
                 remaining_cnt = (epochs - ep - 1) * train_set_len + train_set_len - i
                 psnr = mse2psnr(img_loss)
                 print("Traning Epoch: %4d / %4d\t Iter %4d / %4d\ttrain loss: %.4f\tPSNR: %.3lf\tlr:%.7lf\tcenter crop:%.1lf, %.1lf\tremaining train time:%s"%(
                         ep, epochs, i, train_set_len, loss.item(), psnr, new_lr, now_crop[0], now_crop[1], train_timer.remaining_time(remaining_cnt)
                 ))
-                writer.add_scalar('Train Loss', loss, train_cnt)
-                writer.add_scalar('Learning Rate', new_lr, train_cnt)
-                writer.add_scalar('PSNR', psnr, train_cnt)
+                if rank == 0:
+                    writer.add_scalar('Train Loss', loss, train_cnt)
+                    writer.add_scalar('Learning Rate', new_lr, train_cnt)
+                    writer.add_scalar('PSNR', psnr, train_cnt)
             train_cnt += 1
 
         if ((ep % output_time == 0) or ep == epochs - 1):
@@ -275,30 +276,30 @@ def train(gpu, args):
                         test_results.append(value)
                     test_loss += loss_func(test_result["rgb"], test_img.cuda())
                 eval_timer.toc()
-                if gpu == 0:
-                    writer.add_scalar('Test Loss', loss, test_cnt)
-                    print("Evaluation in epoch: %4d / %4d\t, test counter: %d test loss: %.4f\taverage time: %.4lf\tremaining eval time:%s"%(
-                            ep, epochs, test_cnt, test_loss.item() / 2, eval_timer.get_mean_time(), eval_timer.remaining_time(epochs - ep - 1)
-                    ))
-                    save_image(test_results, "./output/result_%03d.png"%(test_cnt), nrow = 1 + render_normal + render_depth)
+                writer.add_scalar('Test Loss', loss, test_cnt)
+                print("Evaluation in epoch: %4d / %4d\t, test counter: %d test loss: %.4f\taverage time: %.4lf\tremaining eval time:%s"%(
+                        ep, epochs, test_cnt, test_loss.item() / 2, eval_timer.get_mean_time(), eval_timer.remaining_time(epochs - ep - 1)
+                ))
+                save_image(test_results, "./output/result_%03d.png"%(test_cnt), nrow = 1 + render_normal + render_depth)
                 # ======== Saving checkpoints ========
-                # TODO: this model saving might need to be modified
-                # saveModel(mip_net,  "%schkpt_%d_mip.pt"%(default_chkpt_path, train_cnt), {"train_cnt": train_cnt, "epoch": ep}, opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
-                # saveModel(prop_net,  "%schkpt_%d_prop.pt"%(default_chkpt_path, train_cnt), opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
+                if rank == 0:
+                    saveModel(mip_net,  f"{default_chkpt_path}chkpt_{(train_cnt % args.max_size) + 1}_mip.pt",
+                                         {"train_cnt": train_cnt, "epoch": ep}, opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
+                    saveModel(prop_net,  f"{default_chkpt_path}chkpt_{(train_cnt % args.max_size) + 1}_prop.pt", 
+                                        opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
                 test_cnt += 1
             mip_net.train()
             prop_net.train()
         dist.barrier()  
         epoch_timer.toc()
 
-        if gpu == 0:
-            print("Epoch %4d / %4d completed\trunning time for this epoch: %.5lf\testimated remaining time: %s"
-                    %(ep, epochs, epoch_timer.get_mean_time(), epoch_timer.remaining_time(epochs - ep - 1))
-            )
+        print("Epoch %4d / %4d completed\trunning time for this epoch: %.5lf\testimated remaining time: %s"
+                %(ep, epochs, epoch_timer.get_mean_time(), epoch_timer.remaining_time(epochs - ep - 1))
+        )
     # ======== Saving the model ========
-    # saveModel(mip_net, "%smodel_%d_mip.pth"%(default_model_path, 2), opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
-    # saveModel(prop_net, "%smodel_%d_prop.pth"%(default_model_path, 2), opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
-    if gpu == 0:
+    if rank == 0:
+        saveModel(mip_net, f"{default_model_path}model_mip.pth", opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
+        saveModel(prop_net, f"{default_model_path}model_prop.pth", opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
         writer.close()
     print("Output completed.")
 
