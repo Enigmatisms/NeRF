@@ -115,7 +115,7 @@ def render_only(args, model_path: str, opt_level: str):
         AdaptiveResize(img_scale),
         transforms.ToTensor(),
     ])
-    testset = CustomDataSet("../dataset/refnerf/%s/"%(dataset_name), transform_funcs, scene_scale, False, use_alpha = False)
+    testset = CustomDataSet("../dataset/%s/"%(dataset_name), transform_funcs, scene_scale, False, use_alpha = False)
 
     cam_fov_test, _ = testset.getCameraParam()
     r_c = testset.r_c()
@@ -133,7 +133,7 @@ def render_only(args, model_path: str, opt_level: str):
         mip_net = RefNeRF(10, args.ide_level, hidden_unit = args.nerf_net_width, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
     else:
         from nerf.mip_model import MipNeRF
-        mip_net = MipNeRF(10, 4, hidden_unit = args.nerf_net_width)
+        mip_net = MipNeRF(10, 4, hidden_unit = args.nerf_net_width).cuda()
     prop_net = ProposalNetwork(10, hidden_unit = args.prop_net_width).cuda()
     if use_amp and opt_mode != "native":
         from apex import amp

@@ -29,8 +29,14 @@ class NeRF(nn.Module):
 
     def loadFromFile(self, load_path:str, use_amp = False, opt = None, other_stuff = None):
         save = torch.load(load_path)   
-        save_model = save['model']                  
-        state_dict = {k:save_model[k] for k in self.state_dict().keys()}
+        save_model = save['model']   
+        filtered_model = {}  
+        for key, val in save_model.items():
+            if key.startswith("module"):
+                filtered_model[key[7:]] = val
+            else:
+                filtered_model[key] = val
+        state_dict = {k:filtered_model[k] for k in self.state_dict().keys()}
         model_dict = self.state_dict()
         model_dict.update(state_dict)
         self.load_state_dict(model_dict)
