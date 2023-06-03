@@ -24,12 +24,12 @@ class AdaptiveResize(nn.Module):
         super().__init__()
         self.ratio = ratio
         self.interpolation = transforms.InterpolationMode.BILINEAR
-        self.max_save = None
+        self.max_size = None
         self.antialias = None
 
     def forward(self, input:Image.Image):
         size = (int(input.size[1] * self.ratio), int(input.size[0] * self.ratio))
-        return F.resize(input, size, self.interpolation, self.max_save, self.antialias)
+        return F.resize(input, size, self.interpolation, self.max_size, self.antialias)
         
 class CustomDataSet(data.Dataset):
     """ Even in the DDP case, we still load images for all the images (won't be a problem)
