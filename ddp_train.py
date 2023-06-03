@@ -114,9 +114,9 @@ def train(gpu, args):
     ])
 
     # ============ Loading dataset ===============
-    trainset = CustomDataSet(f"../{dataset_name}/", transform_funcs, 
+    trainset = CustomDataSet(f"../dataset/{dataset_name}/", transform_funcs, 
         scene_scale, True, use_alpha = False, white_bkg = use_white_bkg)
-    testset = CustomDataSet(f"../{dataset_name}/", transform_funcs, 
+    testset = CustomDataSet(f"../dataset/{dataset_name}/", transform_funcs, 
         scene_scale, False, use_alpha = False, white_bkg = use_white_bkg)
     cam_fov_train, train_cam_tf = trainset.getCameraParam()
     r_c = trainset.r_c()
@@ -276,16 +276,16 @@ def train(gpu, args):
                         test_results.append(value)
                     test_loss += loss_func(test_result["rgb"], test_img.cuda())
                 eval_timer.toc()
-                writer.add_scalar('Test Loss', loss, test_cnt)
                 print("Evaluation in epoch: %4d / %4d\t, test counter: %d test loss: %.4f\taverage time: %.4lf\tremaining eval time:%s"%(
                         ep, epochs, test_cnt, test_loss.item() / 2, eval_timer.get_mean_time(), eval_timer.remaining_time(epochs - ep - 1)
                 ))
                 save_image(test_results, "./output/result_%03d.png"%(test_cnt), nrow = 1 + render_normal + render_depth)
                 # ======== Saving checkpoints ========
                 if rank == 0:
-                    saveModel(mip_net,  f"{default_chkpt_path}chkpt_{(train_cnt % args.max_size) + 1}_mip.pt",
+                    writer.add_scalar('Test Loss', loss, test_cnt)
+                    saveModel(mip_net,  f"{default_chkpt_path}chkpt_{(train_cnt % args.max_save) + 1}_mip.pt",
                                          {"train_cnt": train_cnt, "epoch": ep}, opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
-                    saveModel(prop_net,  f"{default_chkpt_path}chkpt_{(train_cnt % args.max_size) + 1}_prop.pt", 
+                    saveModel(prop_net,  f"{default_chkpt_path}chkpt_{(train_cnt % args.max_save) + 1}_prop.pt", 
                                         opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
                 test_cnt += 1
             mip_net.train()
@@ -316,7 +316,7 @@ def main():
     args = parser.parse_args()      # spherical rendering is disabled (for now)
 
     args.world_size = args.gpus * args.nodes
-    os.environ['MASTER_ADDR'] = '192.168.1.156'
+    os.environ['MASTER_ADDR'] = '177.177.94.23'
     os.environ['MASTER_PORT'] = '11451'
     os.environ['NCCL_SOCKET_IFNAME'] = 'eth0'
     mp.spawn(train, nprocs=args.gpus, args=(args,))
