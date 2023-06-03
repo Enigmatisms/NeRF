@@ -72,10 +72,9 @@ def train(gpu, args):
         except ModuleNotFoundError:
             print("Nvidia APEX module is not found. Only native model is available")
 
-    if not os.path.exists("./output/"):
-        os.mkdir("./output/")
-    if not os.path.exists("./check_points/"):
-        os.mkdir("./check_points/")
+    for folder in ("./output/", "./check_points/", "./model/"):
+        if not os.path.exists(folder):
+            os.mkdir(folder)
 
     if not torch.cuda.is_available():
         print("CUDA not available.")
