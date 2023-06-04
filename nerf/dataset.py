@@ -49,7 +49,7 @@ class CustomDataSet(data.Dataset):
         self.scene_scale = scene_scale
         self.white_bkg = white_bkg
         self.use_div = use_div
-        self.cam_fov, self.tfs, self.divisions = self.__get_camera_param()
+        self.cam_fov, self.tfs, self.divisions, self.weights = self.__get_camera_param()
 
     def __len__(self):
         return len(self.total_imgs)
@@ -81,9 +81,11 @@ class CustomDataSet(data.Dataset):
         tf_np = np.stack([frame["transform_matrix"] for frame in items["frames"]], axis = 0)
         tfs = torch.from_numpy(tf_np)[:, :3, :]
         division = None
+        weights = None
         if use_div:
             division = items.get('division', None)
-        return cam_fov, tfs.float(), division
+            weights = items.get('weights', None)
+        return cam_fov, tfs.float(), division, weights
         
     def __get_camera_param(self):
         json_path = f"{self.root_dir}transforms_{'train' if self.is_train else 'test'}"

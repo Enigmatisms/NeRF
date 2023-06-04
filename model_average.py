@@ -115,6 +115,7 @@ def train(gpu, args):
         scene_scale, False, use_alpha = False, white_bkg = use_white_bkg)
     cam_fov_train, _ = trainset.getCameraParam()
     r_c = trainset.r_c()
+    model_weights = [1 / args.nodes for _ in range(args.nodes)] if trainset.weights is None else trainset.weights
     
     # ============= Buiding dataloader ===============
 
@@ -231,21 +232,21 @@ def train(gpu, args):
             comm_timer.tic()
             print(f"Using model average, method: {args.ma_method}... ", end = '')
             if ma_method == 'p2p':
-                if args.nodes > 2:
-                    raise ValueError("p2p is only implemented for tesing parameter conmmunication between two nodes.")
+                # This is a serialized reduce - broadcast (a central node exists)
                 if rank == 0:
-                    param_recv(container, source_rank = 1)
-                    network_average(container, mip_net)
-                    param_send(mip_net, dist_ranks = [1])
+                    param_recv_avg(mip_net, container, model_weights, [1, 2, 3])
+                    # Receive from multiple nodes
+                    param_send(mip_net, dist_ranks = [1, 2, 3])
                 else:
                     param_send(mip_net, dist_ranks = [0])
-                    # Then other process has nothing to do but waiting for the reduce and resend
-                    # Directly replace the network with the averaged parameters
+                    # Receive from only one node
                     param_recv(mip_net, source_rank = 0)
             elif ma_method == 'broadcast':      # reduce-broadcast (one of the node is the bottleneck)
-                param_reduce(mip_net, args.nodes, 0)
+                param_reduce(mip_net, args.nodes, model_weights, rank, 0)
                 param_broadcast(mip_net, 0)
             elif ma_method == 'all_reduce':      # all-reduce (one-step reduce-broadcast)
+                for param in mip_net.parameters():
+                    param.data *= model_weights[rank]
                 param_all_reduce(mip_net, args.nodes)
             else:
                 # TODO: more delicate communication strategy should be implemented
