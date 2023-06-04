@@ -1,7 +1,6 @@
 #-*-coding:utf-8-*-
 """
     NeRF with mip ideas baseline model
-    # TODO: proposal network is not a DDP model now
 """
 import os
 import torch
@@ -9,18 +8,20 @@ import torch.nn.functional as F
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from torch import nn
 from torch import optim
 from torchvision import transforms
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader
 
+from nerf.param_com import *
 from nerf.timer import Timer
+from nerf.mip_model import MipNeRF
 from nerf.nerf_base import DecayLrScheduler, NeRF
+from nerf.local_shuffler import LocalShuffleSampler
 from nerf.dataset import CustomDataSet, AdaptiveResize
 from torchvision.utils import save_image
 from nerf.nerf_helper import nan_hook, saveModel
 from nerf.mip_methods import maxBlurFilter
-from nerf.procedures import render_image, get_parser, render_only
+from nerf.procedures import render_image, get_parser
 from nerf.utils import fov2Focal, getSummaryWriter, validSampler, randomFromOneImage, inverseSample
 from nerf.addtional import getBounds, ProposalLoss, ProposalNetwork, LossPSNR
 from torch.cuda.amp.grad_scaler import GradScaler
@@ -55,11 +56,9 @@ def train(gpu, args):
     scene_scale         = args.scene_scale
     use_white_bkg       = args.white_bkg
     opt_mode            = args.opt_mode        
-    use_ref_nerf        = args.ref_nerf
     grad_clip_val       = args.grad_clip
     render_depth        = args.render_depth
     render_normal       = args.render_normal
-    prop_normal         = args.prop_normal
     actual_lr           = args.lr * sample_ray_num / 512        # bigger batch -> higher lr (linearity)
     train_cnt, ep_start = None, None
 
@@ -83,20 +82,9 @@ def train(gpu, args):
     
     # ======= instantiate model =====
     # NOTE: model is recommended to have loadFromFile method
-    if use_ref_nerf:
-        from nerf.ref_model import RefNeRF, WeightedNormalLoss, BackFaceLoss
-        normal_loss_func = WeightedNormalLoss(True)
-        bf_loss_func = BackFaceLoss() 
-        mip_net = RefNeRF(10, args.ide_level, hidden_unit = args.nerf_net_width, perturb_bottle_neck_w = args.bottle_neck_noise, use_srgb = args.use_srgb).cuda()
-    else:
-        from nerf.mip_model import MipNeRF
-        mip_net = MipNeRF(10, 4, hidden_unit = args.nerf_net_width).cuda()
-
+    mip_net = MipNeRF(10, 4, hidden_unit = args.nerf_net_width).cuda(gpu)
     prop_net = ProposalNetwork(10, hidden_unit = args.prop_net_width).cuda(gpu)
-    mip_net.cuda(gpu)
-    # Wrap the model. Note that proposal network is not a DDP model for now
-    mip_net = nn.parallel.DistributedDataParallel(mip_net, device_ids=[gpu])
-    prop_net = ProposalNetwork(10, hidden_unit = args.prop_net_width).cuda(gpu)
+    # Wrap the model
 
     if debugging:
         for submodule in mip_net.modules():
@@ -105,7 +93,7 @@ def train(gpu, args):
 
     # ======= Loss function ==========
     loss_func = torch.nn.MSELoss()
-    prop_loss_func = ProposalLoss().cuda()
+    prop_loss_func = ProposalLoss().cuda(gpu)
     mse2psnr = LossPSNR()
     # ======= Optimizer and scheduler ========
 
@@ -115,18 +103,18 @@ def train(gpu, args):
     ])
 
     # ============ Loading dataset ===============
+    # For model average uses, we should 
     trainset = CustomDataSet(f"../dataset/{dataset_name}/", transform_funcs, 
-        scene_scale, True, use_alpha = False, white_bkg = use_white_bkg)
+        scene_scale, True, use_alpha = False, white_bkg = use_white_bkg, use_div = True)
     testset = CustomDataSet(f"../dataset/{dataset_name}/", transform_funcs, 
         scene_scale, False, use_alpha = False, white_bkg = use_white_bkg)
-    cam_fov_train, train_cam_tf = trainset.getCameraParam()
+    cam_fov_train, _ = trainset.getCameraParam()
     r_c = trainset.r_c()
-    train_cam_tf = train_cam_tf.cuda()
-    del train_cam_tf
     
     # ============= Buiding dataloader ===============
 
-    train_sampler = DistributedSampler(trainset, num_replicas = args.world_size, rank = rank)
+    # train_set separation
+    train_sampler = LocalShuffleSampler(trainset, num_replicas = args.world_size, rank = rank)
     train_loader = DataLoader(dataset=trainset, batch_size=1,
                                                 num_workers=4,
                                                 pin_memory=True,
@@ -190,34 +178,17 @@ def train(gpu, args):
             )
             # output 
             def run(is_ref_model = False):
-                coarse_samples.requires_grad = prop_normal                  
                 density = prop_net.forward(coarse_samples)
-                if prop_normal == True:
-                    coarse_grad = -RefNeRF.get_grad(density, coarse_samples)
                 density = F.softplus(density)
                 prop_weights_raw = ProposalNetwork.get_weights(density, coarse_lengths, coarse_cam_rays[:, 3:])      # (ray_num, num of proposal interval)
                 prop_weights = maxBlurFilter(prop_weights_raw, 0.01)
 
                 coarse_normal_loss = normal_loss = bf_loss = 0.
                 fine_lengths, below_idxs = inverseSample(prop_weights, coarse_lengths, fine_sample_pnum + 1, sort = True)
-                if is_ref_model == True:
-                    fine_samples, fine_lengths, below_idxs, sort_ids = NeRF.coarseFineMerge(coarse_cam_rays, coarse_lengths, fine_lengths, below_idxs)
-                    fine_pos, fine_dir = fine_samples.split((3, 3), dim = -1)
-                    fine_pos.requires_grad = True
-                    fine_rgbo, pred_normal = mip_net.forward(fine_pos, fine_dir)
-                    density_grad = -RefNeRF.get_grad(fine_rgbo[..., -1], fine_pos)
-                    fine_rgbo[..., -1] = F.softplus(fine_rgbo[..., -1] + 0.5)
-                    fine_rendered, weights, _ = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:], mip_net.density_act)
-                    normal_loss = normal_loss_func(weights, density_grad, pred_normal)
-                    bf_loss = bf_loss_func(weights, pred_normal, fine_dir)
-                    if prop_normal == True:
-                        coarse_pt_fine_grad = RefNeRF.coarse_grad_select(density_grad, sort_ids, coarse_sample_pnum)
-                        coarse_normal_loss = normal_loss_func(prop_weights, coarse_pt_fine_grad.detach(), coarse_grad)
-                else:
-                    fine_lengths = fine_lengths[..., :-1]
-                    fine_samples = NeRF.length2pts(coarse_cam_rays, fine_lengths)
-                    fine_rgbo = mip_net.forward(fine_samples)
-                    fine_rendered, weights, _ = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])
+                fine_lengths = fine_lengths[..., :-1]
+                fine_samples = NeRF.length2pts(coarse_cam_rays, fine_lengths)
+                fine_rgbo = mip_net.forward(fine_samples)
+                fine_rendered, weights, _ = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])
                 weight_bounds:torch.Tensor = getBounds(prop_weights, below_idxs)             # output shape: (ray_num, num of conical frustum)
                 opt.zero_grad()
                 img_loss:torch.Tensor = loss_func(fine_rendered, rgb_targets)                           # stop the gradient of NeRF MLP 
@@ -228,19 +199,19 @@ def train(gpu, args):
             if use_amp:
                 if opt_mode == "native":
                     with autocast():
-                        loss, img_loss = run(use_ref_nerf)
+                        loss, img_loss = run()
                         scaler.scale(loss).backward()
                         grad_clip_func(grad_vars, grad_clip_val)
                         scaler.step(opt)
                         scaler.update()
                 else:
-                    loss, img_loss = run(use_ref_nerf)
+                    loss, img_loss = run()
                     with amp.scale_loss(loss, opt) as scaled_loss:
                         scaled_loss.backward()
                     grad_clip_func(grad_vars, grad_clip_val)
                     opt.step()
             else:
-                loss, img_loss = run(use_ref_nerf)
+                loss, img_loss = run()
                 loss.backward()
                 grad_clip_func(grad_vars, grad_clip_val)
                 opt.step()
@@ -313,6 +284,8 @@ def main():
                         help='number of gpus per node')
     parser.add_argument('-nr', '--nr', default=0, type=int,
                         help='ranking within the nodes')
+    parser.add_argument('-div', '--div', default=False, action = 'store_true',
+                        help='Whether to use divided dataset')
 
     args = parser.parse_args()      # spherical rendering is disabled (for now)
 

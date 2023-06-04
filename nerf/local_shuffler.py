@@ -4,12 +4,16 @@
     @date: 2023-5-31
 """
 
+import sys
+sys.path.append("..")
+
 import random
-from copy import deepcopy
+import numpy as np
 import torch.distributed as dist
-from typing import Optional, List
+from copy import deepcopy
 from torchvision import transforms
 from dataset import CustomDataSet, AdaptiveResize
+from typing import Optional, List, Union, Iterable
 from torch.utils.data import DistributedSampler, Dataset, DataLoader
 
 class LocalShuffleSampler(DistributedSampler):
@@ -24,14 +28,24 @@ class LocalShuffleSampler(DistributedSampler):
 
         indices: 2D list, shape (number of models, <dynamic> number of samples)
     """
-    def __init__(self, dataset: Dataset, indices: List[List[int]],
+    def __init__(self, dataset: Dataset, indices: Union[List[int], int] = 4,
                 rank: Optional[int] = None, shuffle: bool = True,
-                seed: int = 0) -> None:
+                seed: int = 0, allow_inbalance = False) -> None:
         if rank is None:
             if not dist.is_available():
                 raise RuntimeError("Requires distributed package to be available")
             rank = dist.get_rank()
-        num_replicas = len(indices)
+        if not isinstance(indices, Iterable):
+            # indices is int
+            length = len(dataset)
+            num_replicas = indices
+            division_len = length // num_replicas
+            indices = np.int32([0 for _ in range(length)])
+            for i in range(num_replicas - 1):
+                indices[i * division_len:(i + 1) * division_len] = i
+            indices[(num_replicas - 1) * division_len:] = num_replicas - 1
+        else:
+            num_replicas = max(indices) + 1
         if rank >= num_replicas or rank < 0:
             raise ValueError(
                 "Invalid rank {}, rank should be in the interval"
@@ -40,13 +54,19 @@ class LocalShuffleSampler(DistributedSampler):
         self.num_replicas = num_replicas
 
         # get the minimum of all samples
-        self.min_sample = min([len(index_list) for index_list in indices])
 
         self.rank = rank
         self.epoch = 0
         self.drop_last = False
 
-        self.samples = deepcopy(indices)
+        self.samples = [[] for _ in range(num_replicas)]
+        for i, index in enumerate(indices):
+            self.samples[index].append(i)
+        
+        if allow_inbalance:
+            self.min_sample = None
+        else:
+            self.min_sample = min([len(index_list) for index_list in self.samples])
 
         self.shuffle = shuffle
         self.seed = seed
@@ -69,6 +89,9 @@ class LocalShuffleSampler(DistributedSampler):
         """ If we do not cut off at the min sample, this should be changed """
         return self.min_sample
     
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+    
     """ Note that set_epoch is inherited """
 
 if __name__ == "__main__":
@@ -79,10 +102,13 @@ if __name__ == "__main__":
     ])
 
 
-    trainset = CustomDataSet(f"../../dataset/nerf_synthetic/lego/", transform_funcs, 
-        1.0, True, use_alpha = False, white_bkg = True)
-    sampler = LocalShuffleSampler(trainset, [[0, 6, 7, 5, 2]], rank=0)
-    dataloader = DataLoader(trainset, batch_size = 1, sampler = sampler, shuffle = False)
+    trainset = CustomDataSet(f"../../dataset/hotdog/", transform_funcs, 
+        1.0, True, use_alpha = False, white_bkg = True, use_div = False)
+    division = 4 if trainset.divisions is None else trainset.divisions
+    sampler = LocalShuffleSampler(trainset, division, rank=2)
+    dataloader = DataLoader(trainset, batch_size = 1, sampler = sampler)
 
-    for train_img, train_tf in dataloader:
-        print(train_img.shape, train_tf.shape)
+    for i in range(2):
+        for train_img, train_tf in dataloader:
+            print(train_img.shape, train_tf.shape)
+            sampler.set_epoch(i + 1)                        # Don't forget to do this!

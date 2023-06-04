@@ -5,14 +5,9 @@ from copy import deepcopy
 
 import configargparse
 import numpy as np
-import open3d as o3d
-import open3d.visualization.gui as gui
-from colorama import Fore, Style
-from colorama import init as colorama_init
 
 colors = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
 division_color = [[1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]]
-styles = [Fore.YELLOW, Fore.MAGENTA, Fore.CYAN, Fore.WHITE]
 
 # Draw arrow from https://stackoverflow.com/questions/59026581/create-arrows-in-open3d
 def calculate_zy_rotation_for_arrow(vec):
@@ -116,6 +111,15 @@ def visualize_paths(opts):
 
         with open(output_pose_path, 'w', encoding = 'utf-8') as file:
             json.dump(output_json, file, indent = 4)
+            
+    if not opts.use_gui:
+        return
+    
+    import open3d as o3d
+    import open3d.visualization.gui as gui
+    from colorama import Fore, Style
+    from colorama import init as colorama_init
+    styles = [Fore.YELLOW, Fore.MAGENTA, Fore.CYAN, Fore.WHITE]
 
     frame_pos = []
     frame_axes = []
@@ -175,9 +179,10 @@ def get_parser():
     parser.add_argument("--name"       , type = str, required = True, help = "Input json scene name")
     parser.add_argument("--filename"   , type = str, default = "transforms_train.json", help = "Input json scene name")
     parser.add_argument("--mix_num"    , type = int, default = 3, help = "Number of poses to mix with the adjacent division")
+    parser.add_argument('-g', "--use_gui" , default = False, action = 'store_true', help = "Whether to use GUI")
     
-    parser.add_argument("--input_path" , type = str, default = "../../nerf_synthetic/", help = "Input json path")
-    parser.add_argument("--output_path", type = str, default = "../../nerf_synthetic/", help = "Output json path")
+    parser.add_argument("--input_path" , type = str, default = "../../dataset/", help = "Input json path")
+    parser.add_argument("--output_path", type = str, default = "../../dataset/", help = "Output json path")
     return parser.parse_args()
 
 if __name__ == "__main__":

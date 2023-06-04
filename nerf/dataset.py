@@ -37,7 +37,7 @@ class CustomDataSet(data.Dataset):
 
         TODO: test the sampler
     """
-    def __init__(self, root_dir, transform, scene_scale = 1.0, is_train = True, use_alpha = False, white_bkg = False):
+    def __init__(self, root_dir, transform, scene_scale = 1.0, is_train = True, use_alpha = False, white_bkg = False, use_div = False):
         self.is_train = is_train
         self.root_dir = root_dir
         self.main_dir = root_dir + ("train/" if is_train else "test/")
@@ -48,12 +48,14 @@ class CustomDataSet(data.Dataset):
         self.use_alpha = use_alpha
         self.scene_scale = scene_scale
         self.white_bkg = white_bkg
-        self.cam_fov, self.tfs = self.__get_camera_param()
+        self.use_div = use_div
+        self.cam_fov, self.tfs, self.divisions = self.__get_camera_param()
 
     def __len__(self):
         return len(self.total_imgs)
 
     def __getitem__(self, idx):
+        print(f"Index: {idx}")
         img_loc = os.path.join(self.main_dir, self.total_imgs[idx])
         image = Image.open(img_loc, mode = 'r').convert("RGBA" if self.use_alpha or self.white_bkg else "RGB")
         tensor_image = self.transform(image)
@@ -71,19 +73,26 @@ class CustomDataSet(data.Dataset):
         self.is_cuda = flag
 
     @staticmethod
-    def readFromJson(path:str):
+    def readFromJson(path:str, use_div = False):
         with open(path, "r") as file:
-            items = json.load(file)
+            items: dict = json.load(file)
         cam_fov = items["camera_angle_x"]
         if "camera_angle_y" in items:
             cam_fov = (cam_fov, items["camera_angle_y"])
         tf_np = np.stack([frame["transform_matrix"] for frame in items["frames"]], axis = 0)
         tfs = torch.from_numpy(tf_np)[:, :3, :]
-        return cam_fov, tfs.float()
+        division = None
+        if use_div:
+            division = items.get('division', None)
+        return cam_fov, tfs.float(), division
         
     def __get_camera_param(self):
-        json_file = "%stransforms_%s.json"%(self.root_dir, "train" if self.is_train else "test")
-        return CustomDataSet.readFromJson(json_file)
+        json_path = f"{self.root_dir}transforms_{'train' if self.is_train else 'test'}"
+        if self.use_div:
+            json_path = f"{json_path}_div.json"
+        else:
+            json_path = f"{json_path}.json"
+        return CustomDataSet.readFromJson(json_path, self.use_div)
 
     def getCameraParam(self):
         return self.cam_fov, self.tfs
