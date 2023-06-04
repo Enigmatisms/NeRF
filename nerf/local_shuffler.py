@@ -30,7 +30,7 @@ class LocalShuffleSampler(DistributedSampler):
     """
     def __init__(self, dataset: Dataset, indices: Union[List[int], int] = 4,
                 rank: Optional[int] = None, shuffle: bool = True,
-                seed: int = 0, allow_inbalance = False) -> None:
+                seed: int = 0, allow_imbalance = False) -> None:
         if rank is None:
             if not dist.is_available():
                 raise RuntimeError("Requires distributed package to be available")
@@ -63,7 +63,7 @@ class LocalShuffleSampler(DistributedSampler):
         for i, index in enumerate(indices):
             self.samples[index].append(i)
         
-        if allow_inbalance:
+        if allow_imbalance:
             self.min_sample = None
         else:
             self.min_sample = min([len(index_list) for index_list in self.samples])
@@ -82,7 +82,6 @@ class LocalShuffleSampler(DistributedSampler):
             # This can spark a new strategy (and a new situation)
         else:
             indices = list(range(len(self.dataset)))  # type: ignore[arg-type]
-        print(indices)
         return iter(indices)
     
     def __len__(self):

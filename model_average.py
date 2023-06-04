@@ -33,33 +33,38 @@ default_model_path = "./model/"
 
 def train(gpu, args):
     torch.manual_seed(0)
-    epochs              = args.epochs
-    sample_ray_num      = args.sample_ray_num
-    coarse_sample_pnum  = args.coarse_sample_pnum
-    fine_sample_pnum    = args.fine_sample_pnum
-    near_t              = args.near
-    far_t               = args.far
-    center_crop_iter    = args.center_crop_iter
-    center_crop         = (args.center_crop_x, args.center_crop_y)
+    epochs             = args.epochs
+    sample_ray_num     = args.sample_ray_num
+    coarse_sample_pnum = args.coarse_sample_pnum
+    fine_sample_pnum   = args.fine_sample_pnum
+    near_t             = args.near
+    far_t              = args.far
+    
+    center_crop_iter   = args.center_crop_iter
+    center_crop        = (args.center_crop_x, args.center_crop_y)
+    eval_time          = args.eval_time
+    dataset_name       = args.dataset_name
+    load_path_mip      = default_chkpt_path + args.name + "_mip.pt"
+    load_path_prop     = default_chkpt_path + args.name + "_prop.pt"
 
-    eval_time           = args.eval_time
-    dataset_name        = args.dataset_name
-    load_path_mip       = default_chkpt_path + args.name + "_mip.pt"
-    load_path_prop      = default_chkpt_path + args.name + "_prop.pt"
     # Bool options
-    del_dir             = args.del_dir
-    use_load            = args.load
-    debugging           = args.debug
-    output_time         = args.output_time
-    use_amp             = (args.use_scaler and (not debugging))
-    img_scale           = args.img_scale
-    scene_scale         = args.scene_scale
-    use_white_bkg       = args.white_bkg
-    opt_mode            = args.opt_mode        
-    grad_clip_val       = args.grad_clip
-    render_depth        = args.render_depth
-    render_normal       = args.render_normal
-    actual_lr           = args.lr * sample_ray_num / 512        # bigger batch -> higher lr (linearity)
+    del_dir            = args.del_dir
+    use_load           = args.load
+    debugging          = args.debug
+    use_amp            = (args.use_scaler and (not debugging))
+    use_white_bkg      = args.white_bkg
+    render_normal      = args.render_normal
+
+    render_depth       = args.render_depth
+    output_time        = args.output_time
+    img_scale          = args.img_scale
+    scene_scale        = args.scene_scale
+    opt_mode           = args.opt_mode        
+    grad_clip_val      = args.grad_clip
+    actual_lr          = args.lr * sample_ray_num / 512        # bigger batch -> higher lr (linearity)
+    ma_epoch           = args.ma_epoch
+    ma_method          = args.ma_method
+    
     train_cnt, ep_start = None, None
 
     rank = args.nr * args.gpus + gpu
@@ -82,6 +87,11 @@ def train(gpu, args):
     
     # ======= instantiate model =====
     # NOTE: model is recommended to have loadFromFile method
+    
+    # This is used to receive all information
+    container = MipNeRF(10, 4, hidden_unit = args.nerf_net_width).cuda(gpu)
+    container.requires_grad_(False)
+    
     mip_net = MipNeRF(10, 4, hidden_unit = args.nerf_net_width).cuda(gpu)
     prop_net = ProposalNetwork(10, hidden_unit = args.prop_net_width).cuda(gpu)
     # Wrap the model
@@ -105,7 +115,7 @@ def train(gpu, args):
     # ============ Loading dataset ===============
     # For model average uses, we should 
     trainset = CustomDataSet(f"../dataset/{dataset_name}/", transform_funcs, 
-        scene_scale, True, use_alpha = False, white_bkg = use_white_bkg, use_div = True)
+        scene_scale, True, use_alpha = False, white_bkg = use_white_bkg, use_div = opt.div)
     testset = CustomDataSet(f"../dataset/{dataset_name}/", transform_funcs, 
         scene_scale, False, use_alpha = False, white_bkg = use_white_bkg)
     cam_fov_train, _ = trainset.getCameraParam()
@@ -114,7 +124,9 @@ def train(gpu, args):
     # ============= Buiding dataloader ===============
 
     # train_set separation
-    train_sampler = LocalShuffleSampler(trainset, num_replicas = args.world_size, rank = rank)
+    division = 4 if trainset.divisions is None else trainset.divisions
+    train_sampler = LocalShuffleSampler(trainset, indices=division, num_replicas = args.world_size, 
+                                                rank = rank, allow_imbalance = args.allow_imbalanced)
     train_loader = DataLoader(dataset=trainset, batch_size=1,
                                                 num_workers=4,
                                                 pin_memory=True,
@@ -177,7 +189,7 @@ def train(gpu, args):
                 valid_pixels, valid_coords, train_tf, sample_ray_num, coarse_sample_pnum, train_focal, near_t, far_t, True
             )
             # output 
-            def run(is_ref_model = False):
+            def run():
                 density = prop_net.forward(coarse_samples)
                 density = F.softplus(density)
                 prop_weights_raw = ProposalNetwork.get_weights(density, coarse_lengths, coarse_cam_rays[:, 3:])      # (ray_num, num of proposal interval)
@@ -190,7 +202,6 @@ def train(gpu, args):
                 fine_rgbo = mip_net.forward(fine_samples)
                 fine_rendered, weights, _ = NeRF.render(fine_rgbo, fine_lengths, coarse_cam_rays[:, 3:])
                 weight_bounds:torch.Tensor = getBounds(prop_weights, below_idxs)             # output shape: (ray_num, num of conical frustum)
-                opt.zero_grad()
                 img_loss:torch.Tensor = loss_func(fine_rendered, rgb_targets)                           # stop the gradient of NeRF MLP 
 
                 prop_loss:torch.Tensor = prop_loss_func(weight_bounds, weights.detach())                # stop the gradient of NeRF MLP 
@@ -215,6 +226,7 @@ def train(gpu, args):
                 loss.backward()
                 grad_clip_func(grad_vars, grad_clip_val)
                 opt.step()
+            opt.zero_grad()
 
             train_timer.toc()
 
@@ -230,7 +242,29 @@ def train(gpu, args):
                     writer.add_scalar('Train Loss', loss, train_cnt)
                     writer.add_scalar('Learning Rate', new_lr, train_cnt)
                     writer.add_scalar('PSNR', psnr, train_cnt)
+            if train_cnt % ma_epoch == 0:
+                # double barrier to ensure synchronized sending / receiving
+                dist.barrier()
+                print("Using model average...")
+                if ma_method == 'p2p':
+                    if rank == 0:
+                        param_recv(container, source_rank = 1)
+                        network_average(container, mip_net)
+                        param_send(mip_net, dist_ranks = [1])
+                    else:
+                        param_send(mip_net, dist_ranks = [0])
+                        # Then other process has nothing to do but waiting for the reduce and resend
+                        # Directly replace the network with the averaged parameters
+                        param_recv(mip_net, source_rank = 0)
+                elif ma_method == 'broadcast':      # reduce-broadcast
+                    pass
+                elif ma_method == 'all_reduce':      # all-reduce (one-step reduce-broadcast)
+                    pass
+                else:
+                    pass
+                dist.barrier()
             train_cnt += 1
+            train_sampler.set_epoch(train_cnt)
 
         if ((ep % output_time == 0) or ep == epochs - 1):
             mip_net.eval()
@@ -262,7 +296,9 @@ def train(gpu, args):
                 test_cnt += 1
             mip_net.train()
             prop_net.train()
-        dist.barrier()  
+            
+        if not args.allow_imbalanced:
+            dist.barrier()  
         epoch_timer.toc()
 
         print("Epoch %4d / %4d completed\trunning time for this epoch: %.5lf\testimated remaining time: %s"
@@ -278,6 +314,11 @@ def train(gpu, args):
 def main():
     parser = get_parser()
     # Distributed model settings
+    parser.add_argument('--ma_epoch', required=True, type = int,
+                        help='Model average will be used each <ma_epoch> epoch')
+    parser.add_argument('--ma_method', choices=['p2p', 'broadcast', 'delicate', 'all_reduce'], type = 'p2p',
+                        help='Model average strategies')
+    
     parser.add_argument('-n', '--nodes', default=1, type=int, metavar='N',
                         help='number of data loading workers (default: 4)')
     parser.add_argument('-g', '--gpus', default=1, type=int,
@@ -286,6 +327,8 @@ def main():
                         help='ranking within the nodes')
     parser.add_argument('-div', '--div', default=False, action = 'store_true',
                         help='Whether to use divided dataset')
+    parser.add_argument('--allow_imbalanced', default=False, action = 'store_true',
+                        help='Whether to allow imbalanced dataset')
 
     args = parser.parse_args()      # spherical rendering is disabled (for now)
 
