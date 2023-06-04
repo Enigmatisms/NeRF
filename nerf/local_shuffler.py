@@ -12,9 +12,9 @@ import numpy as np
 import torch.distributed as dist
 from copy import deepcopy
 from torchvision import transforms
-from dataset import CustomDataSet, AdaptiveResize
 from typing import Optional, List, Union, Iterable
 from torch.utils.data import DistributedSampler, Dataset, DataLoader
+from nerf.dataset import CustomDataSet, AdaptiveResize
 
 class LocalShuffleSampler(DistributedSampler):
     """ Distributed sampler does not satisfy my requirement

@@ -55,7 +55,6 @@ class CustomDataSet(data.Dataset):
         return len(self.total_imgs)
 
     def __getitem__(self, idx):
-        print(f"Index: {idx}")
         img_loc = os.path.join(self.main_dir, self.total_imgs[idx])
         image = Image.open(img_loc, mode = 'r').convert("RGBA" if self.use_alpha or self.white_bkg else "RGB")
         tensor_image = self.transform(image)
