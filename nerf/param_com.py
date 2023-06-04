@@ -14,7 +14,7 @@ def param_send(model:Union[MipNeRF, ProposalNetwork], dist_ranks: list):
     """ Send to specific machine """
     for param in model.parameters():
         for rank in dist_ranks:
-            dist.send(tensor = param.data, dist = rank)
+            dist.send(tensor = param.data, dst = rank)
             
 def param_recv(model:Union[MipNeRF, ProposalNetwork], source_rank: list):
     """ Receive to specific machine """
@@ -24,18 +24,18 @@ def param_recv(model:Union[MipNeRF, ProposalNetwork], source_rank: list):
 def param_reduce(model:Union[MipNeRF, ProposalNetwork], num_replica: int, dst_rank: int = 0):
     """ Reduce parameter from all other machines """
     for param in model.parameters():
-        dist.reduce(param.data, dst_rank)
+        dist.reduce(tensor = param.data, dst = dst_rank)
         param.data /= num_replica
         
 def param_broadcast(model:Union[MipNeRF, ProposalNetwork], src_rank: int = 0):
     """ Broadcast parameter to all other machines """
     for param in model.parameters():
-        dist.broadcast(param.data, source_rank = src_rank)
+        dist.broadcast(tensor = param.data, src = src_rank)
         
 def param_all_reduce(model:Union[MipNeRF, ProposalNetwork], num_replica: int):
     """ All reduce one step model average (each node is a bottleneck) """
     for param in model.parameters():
-        dist.all_reduce(param.data)
+        dist.all_reduce(tensor = param.data)
         param.data /= num_replica
     
 def network_average(

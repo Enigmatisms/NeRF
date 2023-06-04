@@ -231,7 +231,7 @@ def train(gpu, args):
             start_time = time.time()
             print(f"Using model average, method: {args.ma_method}... ", end = '')
             if ma_method == 'p2p':
-                if args.node > 2:
+                if args.nodes > 2:
                     raise ValueError("p2p is only implemented for tesing parameter conmmunication between two nodes.")
                 if rank == 0:
                     param_recv(container, source_rank = 1)
@@ -301,7 +301,7 @@ def main():
     # Distributed model settings
     parser.add_argument('--ma_epoch', required=True, type = int,
                         help='Model average will be used each <ma_epoch> epoch')
-    parser.add_argument('--ma_method', choices=['p2p', 'broadcast', 'delicate', 'all_reduce'], type = str,
+    parser.add_argument('--ma_method', choices=['p2p', 'broadcast', 'delicate', 'all_reduce'], type = str, default = 'p2p',
                         help='Model average strategies')
     
     parser.add_argument('-n', '--nodes', default=1, type=int, metavar='N',
