@@ -163,7 +163,7 @@ def train(gpu, args):
         ep_start = 0
         train_cnt = ep_start * train_set_len
     test_cnt = ep_start // 20
-    train_timer, eval_timer, epoch_timer = Timer(5), Timer(5), Timer(3)
+    train_timer, eval_timer, epoch_timer, comm_timer = Timer(5), Timer(5), Timer(3), Timer(3)
     for ep in range(ep_start, epochs):
         epoch_timer.tic()
         for i, (train_img, train_tf) in enumerate(train_loader):
@@ -228,7 +228,7 @@ def train(gpu, args):
         if ep % ma_epoch == 0:
             # double barrier to ensure synchronized sending / receiving
             dist.barrier()
-            start_time = time.time()
+            comm_timer.tic()
             print(f"Using model average, method: {args.ma_method}... ", end = '')
             if ma_method == 'p2p':
                 if args.nodes > 2:
@@ -252,7 +252,11 @@ def train(gpu, args):
                 # This is basically the case with correlated camera poses
                 pass
             dist.barrier()
-            print(f"Finished in {time.time() - start_time}s")
+            comm_timer.toc()
+            mean_comm_time = comm_timer.get_mean_time()
+            writer.add_scalar('Time/comm time', mean_comm_time, train_cnt)
+            print(f"Finished in {mean_comm_time}s")
+        epoch_timer.toc()
         
         # evaluation and output (console & checkpointing)
         if ((ep % output_time == 0) or ep == epochs - 1) and ep > ep_start:
@@ -271,12 +275,14 @@ def train(gpu, args):
                         test_results.append(value)
                     test_loss += loss_func(test_result["rgb"], test_img.cuda())
                 eval_timer.toc()
+                eval_mean_time = eval_timer.get_mean_time()
                 print("Evaluation in epoch: %4d / %4d\t, test counter: %d test loss: %.4f\taverage time: %.4lf\tremaining eval time:%s"%(
-                        ep, epochs, test_cnt, test_loss.item() / 2, eval_timer.get_mean_time(), eval_timer.remaining_time(epochs - ep - 1)
+                        ep, epochs, test_cnt, test_loss.item() / 2, eval_mean_time, eval_timer.remaining_time(epochs - ep - 1)
                 ))
                 save_image(test_results, "./output/result_%03d.png"%(test_cnt), nrow = 1 + render_normal + render_depth)
                 # ======== Saving checkpoints ========
                 writer.add_scalar('Test Loss', loss, test_cnt)
+                writer.add_scalar('Time/eval time', eval_mean_time, test_cnt)
                 saveModel(mip_net,  f"{default_chkpt_path}chkpt_{(train_cnt % args.max_save) + 1}_mip.pt",
                                         {"train_cnt": train_cnt, "epoch": ep}, opt = opt, amp = None)
                 saveModel(prop_net,  f"{default_chkpt_path}chkpt_{(train_cnt % args.max_save) + 1}_prop.pt", 
@@ -285,8 +291,8 @@ def train(gpu, args):
             mip_net.train()
             prop_net.train()
             
-        epoch_timer.toc()
-
+        mean_time = epoch_timer.get_mean_time()
+        writer.add_scalar('Time/epoch time', mean_time, train_cnt)
         print("Epoch %4d / %4d completed\trunning time for this epoch: %.5lf\testimated remaining time: %s"
                 %(ep, epochs, epoch_timer.get_mean_time(), epoch_timer.remaining_time(epochs - ep - 1))
         )
