@@ -111,7 +111,7 @@ def visualize_paths(opts):
         divisions = pose_data["division"]
         print("Found pre-computed division, skipping...")
     else:
-        print("Calculating division...")
+        print(f"Calculating division... Neighbor = {opts.neighbor}")
         output_json = deepcopy(pose_data)
         if opts.neighbor:
             divisions, weights = spatial_division(gt)
@@ -134,6 +134,7 @@ def visualize_paths(opts):
         output_json["weights"] = weights
         output_json["mix_num"] = opts.mix_num
         output_json["grouping"] = grouping
+        print("Weights:", weights)
         for i, div_idx in enumerate(divisions):
             output_json["frames"][i]["div_id"] = div_idx
 
@@ -211,8 +212,8 @@ def get_parser():
     parser.add_argument('-g', "--use_gui" , default = False, action = 'store_true', help = "Whether to use GUI")
     parser.add_argument('-n', "--neighbor" , default = False, action = 'store_true', help = "Whether to enable pose neighboring correlation")
     
-    parser.add_argument("--input_path" , type = str, default = "../../nerf_synthetic/", help = "Input json path")
-    parser.add_argument("--output_path", type = str, default = "../../nerf_synthetic/", help = "Output json path")
+    parser.add_argument("--input_path" , type = str, default = "../../dataset/", help = "Input json path")
+    parser.add_argument("--output_path", type = str, default = "../../dataset/", help = "Output json path")
     return parser.parse_args()
 
 if __name__ == "__main__":

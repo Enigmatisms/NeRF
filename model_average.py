@@ -242,7 +242,7 @@ def train(gpu, args):
                     # Receive from only one node
                     param_recv(mip_net, source_rank = 0)
             elif ma_method == 'broadcast':      # reduce-broadcast (one of the node is the bottleneck)
-                param_reduce(mip_net, args.nodes, model_weights, rank, 0)
+                param_reduce(mip_net, model_weights, rank, 0)
                 param_broadcast(mip_net, 0)
             elif ma_method == 'all_reduce':      # all-reduce (one-step reduce-broadcast)
                 for param in mip_net.parameters():
