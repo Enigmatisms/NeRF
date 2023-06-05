@@ -30,7 +30,7 @@ def param_recv_avg(
     for p_tmp, p_model in zip(tmp.parameters(), model.parameters()):
         p_model.data *= weights[self_rank]
         for src_rank in source_ranks:
-            dist.recv(tensor = p_tmp.data, src = src_rank, group = group, group = group)
+            dist.recv(tensor = p_tmp.data, src = src_rank, group = group)
             p_model.data += weights[src_rank] * p_tmp.data
         
 def param_reduce(model:Union[MipNeRF, ProposalNetwork], weights: list, self_rank: int, dst_rank: int = 0, group = None):
