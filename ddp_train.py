@@ -1,13 +1,18 @@
 #-*-coding:utf-8-*-
 """
     NeRF with mip ideas baseline model
+    # TODO: proposal network is not a DDP model now
 """
 import os
 import torch
+import torch.nn.functional as F
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+from torch import nn
 from torch import optim
 from torchvision import transforms
-from torch.utils.data import DataLoader
-import torch.nn.functional as F
+from torch.utils.data import DataLoader, DistributedSampler
 
 from nerf.timer import Timer
 from nerf.nerf_base import DecayLrScheduler, NeRF
@@ -17,14 +22,16 @@ from nerf.nerf_helper import nan_hook, saveModel
 from nerf.mip_methods import maxBlurFilter
 from nerf.procedures import render_image, get_parser, render_only
 from nerf.utils import fov2Focal, getSummaryWriter, validSampler, randomFromOneImage, inverseSample
-from nerf.addtional import getBounds, ProposalLoss, ProposalNetwork, SoftL1Loss, LossPSNR
+from nerf.addtional import getBounds, ProposalLoss, ProposalNetwork, LossPSNR
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.cuda.amp import autocast as autocast
+
 
 default_chkpt_path = "./check_points/"
 default_model_path = "./model/"
 
-def main(args):
+def train(gpu, args):
+    torch.manual_seed(0)
     epochs              = args.epochs
     sample_ray_num      = args.sample_ray_num
     coarse_sample_pnum  = args.coarse_sample_pnum
@@ -56,16 +63,19 @@ def main(args):
     actual_lr           = args.lr * sample_ray_num / 512        # bigger batch -> higher lr (linearity)
     train_cnt, ep_start = None, None
 
+    rank = args.nr * args.gpus + gpu
+    dist.init_process_group(backend='nccl', init_method='env://', world_size=args.world_size, rank=rank)
+    torch.cuda.set_device(gpu)
+
     if use_amp:
         try:
             from apex import amp
         except ModuleNotFoundError:
-            print("Nvidia APEX module is not found.")
+            print("Nvidia APEX module is not found. Only native model is available")
 
-    if not os.path.exists("./output/"):
-        os.mkdir("./output/")
-    if not os.path.exists("./check_points/"):
-        os.mkdir("./check_points/")
+    for folder in ("./output/", "./check_points/", "./model/"):
+        if not os.path.exists(folder):
+            os.mkdir(folder)
 
     if not torch.cuda.is_available():
         print("CUDA not available.")
@@ -81,7 +91,12 @@ def main(args):
     else:
         from nerf.mip_model import MipNeRF
         mip_net = MipNeRF(10, 4, hidden_unit = args.nerf_net_width).cuda()
-    prop_net = ProposalNetwork(10, hidden_unit = args.prop_net_width).cuda()
+
+    prop_net = ProposalNetwork(10, hidden_unit = args.prop_net_width).cuda(gpu)
+    mip_net.cuda(gpu)
+    # Wrap the model. Note that proposal network is not a DDP model for now
+    mip_net = nn.parallel.DistributedDataParallel(mip_net, device_ids=[gpu])
+    prop_net = ProposalNetwork(10, hidden_unit = args.prop_net_width).cuda(gpu)
 
     if debugging:
         for submodule in mip_net.modules():
@@ -99,15 +114,25 @@ def main(args):
         transforms.ToTensor(),
     ])
 
-    trainset = CustomDataSet(f"../{dataset_name}/", transform_funcs, 
+    # ============ Loading dataset ===============
+    trainset = CustomDataSet(f"../dataset/{dataset_name}/", transform_funcs, 
         scene_scale, True, use_alpha = False, white_bkg = use_white_bkg)
-    testset = CustomDataSet(f"../{dataset_name}/", transform_funcs, 
+    testset = CustomDataSet(f"../dataset/{dataset_name}/", transform_funcs, 
         scene_scale, False, use_alpha = False, white_bkg = use_white_bkg)
     cam_fov_train, train_cam_tf = trainset.getCameraParam()
     r_c = trainset.r_c()
     train_cam_tf = train_cam_tf.cuda()
     del train_cam_tf
-    train_loader = DataLoader(trainset, 1, shuffle = True, num_workers = 4)
+    
+    # ============= Buiding dataloader ===============
+
+    train_sampler = DistributedSampler(trainset, num_replicas = args.world_size, rank = rank)
+    train_loader = DataLoader(dataset=trainset, batch_size=1,
+                                                num_workers=4,
+                                                pin_memory=True,
+                                                sampler=train_sampler)
+    
+    # TODO: what about the test loader? Maybe we don't need to load
     cam_fov_test, _ = testset.getCameraParam()
     
     train_focal = fov2Focal(cam_fov_train, r_c)
@@ -116,6 +141,7 @@ def main(args):
 
     grad_vars = list(mip_net.parameters()) + list(prop_net.parameters())
     opt = optim.Adam(params = grad_vars, lr = actual_lr, betas=(0.9, 0.999))
+    
     def grad_clip_func(parameters, grad_clip):
         if grad_clip > 0.:
             torch.nn.utils.clip_grad_norm_(parameters, grad_clip)
@@ -131,7 +157,8 @@ def main(args):
     else:
         print("Not loading or load path '%s' / '%s' does not exist."%(load_path_mip, load_path_prop))
     lr_sch = DecayLrScheduler(args.min_ratio, args.decay_rate, args.decay_step, actual_lr, args.warmup_step)
-
+    
+    # Only two views therefore we do not need testloader
     test_views = []
     for i in (1, 4):
         test_views.append(testset[i])
@@ -139,7 +166,8 @@ def main(args):
     torch.cuda.empty_cache()
 
     # ====== tensorboard summary writer ======
-    writer = getSummaryWriter(epochs, del_dir)
+    if rank == 0:
+        writer = getSummaryWriter(epochs, del_dir)
     train_set_len = len(trainset)
 
     if ep_start is None:
@@ -227,12 +255,13 @@ def main(args):
                 print("Traning Epoch: %4d / %4d\t Iter %4d / %4d\ttrain loss: %.4f\tPSNR: %.3lf\tlr:%.7lf\tcenter crop:%.1lf, %.1lf\tremaining train time:%s"%(
                         ep, epochs, i, train_set_len, loss.item(), psnr, new_lr, now_crop[0], now_crop[1], train_timer.remaining_time(remaining_cnt)
                 ))
-                writer.add_scalar('Train Loss', loss, train_cnt)
-                writer.add_scalar('Learning Rate', new_lr, train_cnt)
-                writer.add_scalar('PSNR', psnr, train_cnt)
+                if rank == 0:
+                    writer.add_scalar('Train Loss', loss, train_cnt)
+                    writer.add_scalar('Learning Rate', new_lr, train_cnt)
+                    writer.add_scalar('PSNR', psnr, train_cnt)
             train_cnt += 1
 
-        if ((ep % output_time == 0) or ep == epochs - 1) and ep > ep_start:
+        if ((ep % output_time == 0) or ep == epochs - 1):
             mip_net.eval()
             prop_net.eval()
             with torch.no_grad():
@@ -248,33 +277,50 @@ def main(args):
                         test_results.append(value)
                     test_loss += loss_func(test_result["rgb"], test_img.cuda())
                 eval_timer.toc()
-                writer.add_scalar('Test Loss', loss, test_cnt)
                 print("Evaluation in epoch: %4d / %4d\t, test counter: %d test loss: %.4f\taverage time: %.4lf\tremaining eval time:%s"%(
                         ep, epochs, test_cnt, test_loss.item() / 2, eval_timer.get_mean_time(), eval_timer.remaining_time(epochs - ep - 1)
                 ))
                 save_image(test_results, "./output/result_%03d.png"%(test_cnt), nrow = 1 + render_normal + render_depth)
                 # ======== Saving checkpoints ========
-                saveModel(mip_net,  "%schkpt_%d_mip.pt"%(default_chkpt_path, train_cnt), {"train_cnt": train_cnt, "epoch": ep}, opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
-                saveModel(prop_net,  "%schkpt_%d_prop.pt"%(default_chkpt_path, train_cnt), opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
+                if rank == 0:
+                    writer.add_scalar('Test Loss', loss, test_cnt)
+                    saveModel(mip_net,  f"{default_chkpt_path}chkpt_{(train_cnt % args.max_save) + 1}_mip.pt",
+                                         {"train_cnt": train_cnt, "epoch": ep}, opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
+                    saveModel(prop_net,  f"{default_chkpt_path}chkpt_{(train_cnt % args.max_save) + 1}_prop.pt", 
+                                        opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
                 test_cnt += 1
             mip_net.train()
             prop_net.train()
+        dist.barrier()  
         epoch_timer.toc()
+
         print("Epoch %4d / %4d completed\trunning time for this epoch: %.5lf\testimated remaining time: %s"
                 %(ep, epochs, epoch_timer.get_mean_time(), epoch_timer.remaining_time(epochs - ep - 1))
         )
     # ======== Saving the model ========
-    saveModel(mip_net, "%smodel_%d_mip.pth"%(default_model_path, 2), opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
-    saveModel(prop_net, "%smodel_%d_prop.pth"%(default_model_path, 2), opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
-    writer.close()
+    if rank == 0:
+        saveModel(mip_net, f"{default_model_path}model_mip.pth", opt = opt, amp = (amp) if use_amp and opt_mode != "native" else None)
+        saveModel(prop_net, f"{default_model_path}model_prop.pth", opt = None, amp = (amp) if use_amp and opt_mode != "native" else None)
+        writer.close()
     print("Output completed.")
 
-if __name__ == "__main__":
+def main():
     parser = get_parser()
+    # Distributed model settings
+    parser.add_argument('-n', '--nodes', default=1, type=int, metavar='N',
+                        help='number of data loading workers (default: 4)')
+    parser.add_argument('-g', '--gpus', default=1, type=int,
+                        help='number of gpus per node')
+    parser.add_argument('-nr', '--nr', default=0, type=int,
+                        help='ranking within the nodes')
+
     args = parser.parse_args()      # spherical rendering is disabled (for now)
-    do_render = args.do_render
-    opt_mode = args.opt_mode
-    if do_render:
-        render_only(args, default_model_path, opt_mode)
-    else:
-        main(args)
+
+    args.world_size = args.gpus * args.nodes
+    os.environ['MASTER_ADDR'] = '177.177.94.23'
+    os.environ['MASTER_PORT'] = '11451'
+    os.environ['NCCL_SOCKET_IFNAME'] = 'eth0'
+    mp.spawn(train, nprocs=args.gpus, args=(args,))
+
+if __name__ == "__main__":
+    main()

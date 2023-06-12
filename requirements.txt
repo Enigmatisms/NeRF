@@ -1,0 +1,8 @@
+torchvision==0.11.3
+torch==1.10.2
+numpy
+opencv-python
+tqdm
+natsort
+tensorboard
+configargparse  

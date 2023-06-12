@@ -7,5 +7,6 @@
 **/*.out
 **/*.pth
 **/*.pt
+data/
 logs/*
 output/*

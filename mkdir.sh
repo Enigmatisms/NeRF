@@ -1,4 +1,4 @@
-if [ ! -d output ]; then
+if [ ! -d output/sphere ]; then
     echo "Creating folder \"output\" and \"output/sphere\"";
     mkdir -p output/sphere
 fi

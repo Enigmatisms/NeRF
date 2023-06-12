@@ -1,3 +1,7 @@
+"""
+    Final delicate solution: 0/2, 1/3 should be grouped
+"""
+
 import os
 import json
 import random
@@ -5,14 +9,9 @@ from copy import deepcopy
 
 import configargparse
 import numpy as np
-import open3d as o3d
-import open3d.visualization.gui as gui
-from colorama import Fore, Style
-from colorama import init as colorama_init
 
 colors = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
 division_color = [[1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]]
-styles = [Fore.YELLOW, Fore.MAGENTA, Fore.CYAN, Fore.WHITE]
 
 # Draw arrow from https://stackoverflow.com/questions/59026581/create-arrows-in-open3d
 def calculate_zy_rotation_for_arrow(vec):
@@ -34,6 +33,7 @@ def calculate_zy_rotation_for_arrow(vec):
     return Rz, Ry
 
 def get_arrow(origin, end, length, scale=1, color = [1, 0, 0]):
+    import open3d as o3d
     assert(not np.all(end == origin))
     vec = (end - origin) * length
     size = np.sqrt(np.sum(vec**2))
@@ -56,11 +56,12 @@ def spatial_division(poses: list):
         # quadrant 3: 00, quadrant 2: 01, quadrant 4: 10, quadrant 1: 11
         division.append(((pose[0, 0] > 0) << 1) + (pose[1, 0] > 0))
     cnts = [division.count(i) for i in range(4)]
-    sum_cnts = sum(cnts) * 0.01
-    print(f"Division information: {cnts[0] / sum_cnts}%, {cnts[1] / sum_cnts}%, {cnts[2] / sum_cnts}%, {cnts[3] / sum_cnts}%")
-    return division
+    sum_cnts = sum(cnts)
+    weights = [cnt / sum_cnts for cnt in cnts]
+    print(f"Division information: {weights[0] * 100}%, {weights[1] * 100}%, {weights[2] * 100}%, {weights[3] * 100}%")
+    return division, weights
 
-def mix_division(divisions: list, shuffle_num: int = 3, rand_seed: int = 114514):
+def mix_division(divisions: list, shuffle_num: int = 3, rand_seed: int = 114514, one_side = True):
     random.seed(rand_seed)
     if shuffle_num == 0:
         return divisions
@@ -68,21 +69,27 @@ def mix_division(divisions: list, shuffle_num: int = 3, rand_seed: int = 114514)
     to_shuffle = []
     length = len(divisions)
     np_divs = np.int32(divisions)
+    
+    actual_shuffle = shuffle_num if one_side else (shuffle_num << 1)
     for i in range(4):
         idx = np.arange(length)[np_divs == i]
-        to_shuffle.append(random.choices(idx, k = shuffle_num << 1))
+        to_shuffle.append(random.choices(idx, k = actual_shuffle))
 
-    left_div = to_shuffle[1]
-    right_div = to_shuffle[2]
+    # This is 3 (quadrant 3)
     div = to_shuffle[0]
-    left_div[:shuffle_num], div[:shuffle_num] = div[:shuffle_num], left_div[:shuffle_num]
-    right_div[shuffle_num:], div[shuffle_num:] = div[shuffle_num:], right_div[shuffle_num:]
+    if not one_side:
+        left_div = to_shuffle[1]
+        left_div[:shuffle_num], div[:shuffle_num] = div[:shuffle_num], left_div[:shuffle_num]
+    right_div = to_shuffle[2]
+    right_div[-shuffle_num:], div[-shuffle_num:] = div[-shuffle_num:], right_div[-shuffle_num:]
     
-    left_div = to_shuffle[2]
-    right_div = to_shuffle[1]
+    # This is 1 (quadrant 1)
     div = to_shuffle[3]
-    left_div[:shuffle_num], div[:shuffle_num] = div[:shuffle_num], left_div[:shuffle_num]
-    right_div[shuffle_num:], div[shuffle_num:] = div[shuffle_num:], right_div[shuffle_num:]
+    if not one_side:
+        left_div = to_shuffle[2]
+        left_div[:shuffle_num], div[:shuffle_num] = div[:shuffle_num], left_div[:shuffle_num]
+    right_div = to_shuffle[1]
+    right_div[-shuffle_num:], div[-shuffle_num:] = div[-shuffle_num:], right_div[-shuffle_num:]
     for i, idx_list in enumerate(to_shuffle):
         np_divs[idx_list] = i
     return np_divs.tolist()
@@ -104,18 +111,44 @@ def visualize_paths(opts):
         divisions = pose_data["division"]
         print("Found pre-computed division, skipping...")
     else:
-        print("Calculating division...")
+        print(f"Calculating division... Neighbor = {opts.neighbor}")
         output_json = deepcopy(pose_data)
-        divisions = spatial_division(gt)
-        divisions = mix_division(divisions, opts.mix_num)
+        if opts.neighbor:
+            divisions, weights = spatial_division(gt)
+            divisions = mix_division(divisions, opts.mix_num, one_side = not opts.two_side)
+            grouping = [[0, 2], [1, 3]]
+        else:
+            total_num = len(gt)
+            div_num = total_num >> 2
+            divisions = []
+            weights = []
+            for i in range(3):
+                divisions += [i for _ in range(div_num)]
+                weights.append(div_num / total_num)
+            last_part_num = total_num - 3 * div_num
+            divisions += [3 for _ in range(last_part_num)]
+            weights.append(last_part_num / total_num)
+            grouping = []
 
         output_json["division"] = divisions
+        output_json["weights"] = weights
         output_json["mix_num"] = opts.mix_num
+        output_json["grouping"] = grouping
+        print("Weights:", weights)
         for i, div_idx in enumerate(divisions):
             output_json["frames"][i]["div_id"] = div_idx
 
         with open(output_pose_path, 'w', encoding = 'utf-8') as file:
             json.dump(output_json, file, indent = 4)
+            
+    if not opts.use_gui:
+        return
+    
+    import open3d as o3d
+    import open3d.visualization.gui as gui
+    from colorama import Fore, Style
+    from colorama import init as colorama_init
+    styles = [Fore.YELLOW, Fore.MAGENTA, Fore.CYAN, Fore.WHITE]
 
     frame_pos = []
     frame_axes = []
@@ -175,9 +208,12 @@ def get_parser():
     parser.add_argument("--name"       , type = str, required = True, help = "Input json scene name")
     parser.add_argument("--filename"   , type = str, default = "transforms_train.json", help = "Input json scene name")
     parser.add_argument("--mix_num"    , type = int, default = 3, help = "Number of poses to mix with the adjacent division")
+    parser.add_argument("--two_side"   , default = False, action = 'store_true', help = "Whether to shuffle with the nearest two divisions")
+    parser.add_argument('-g', "--use_gui" , default = False, action = 'store_true', help = "Whether to use GUI")
+    parser.add_argument('-n', "--neighbor" , default = False, action = 'store_true', help = "Whether to enable pose neighboring correlation")
     
-    parser.add_argument("--input_path" , type = str, default = "../../nerf_synthetic/", help = "Input json path")
-    parser.add_argument("--output_path", type = str, default = "../../nerf_synthetic/", help = "Output json path")
+    parser.add_argument("--input_path" , type = str, default = "../../dataset/", help = "Input json path")
+    parser.add_argument("--output_path", type = str, default = "../../dataset/", help = "Output json path")
     return parser.parse_args()
 
 if __name__ == "__main__":
