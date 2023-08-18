@@ -1,6 +1,7 @@
 # NeRFs
 
 ---
+(README Update 2023.8.18): Note that this repo is a little bit old, the backbone and main logics are implemented last year. For (much) better integrated project, I recommend [nerfstudio](https://github.com/nerfstudio-project/nerfstudio). You can also check our competition results out in [nerfstudio-giga](https://github.com/Enigmatisms/nerfstudio-giga).
 
 This repo contains the following reproduction implementation:
 
